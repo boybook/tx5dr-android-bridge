@@ -364,7 +364,26 @@ export TX5DR_CONFIG_DIR=/opt/tx5dr-data/config
 export TX5DR_LOGS_DIR=/opt/tx5dr-data/logs
 export TX5DR_CACHE_DIR=/opt/tx5dr-data/cache
 export PULSE_SERVER=tcp:127.0.0.1:4718
-export TX5DR_AUDIO_BACKEND=pulse
+export TX5DR_RTAUDIO_API=alsa
+export ALSA_CONFIG_PATH=/opt/tx5dr-data/runtime/asoundrc
+cat > "${'$'}ALSA_CONFIG_PATH" <<'ASOUNDRC'
+pcm.pulse {
+    type pulse
+    server "tcp:127.0.0.1:4718"
+}
+ctl.pulse {
+    type pulse
+    server "tcp:127.0.0.1:4718"
+}
+pcm.!default {
+    type pulse
+    server "tcp:127.0.0.1:4718"
+}
+ctl.!default {
+    type pulse
+    server "tcp:127.0.0.1:4718"
+}
+ASOUNDRC
 pulseaudio --exit-idle-time=-1 --daemonize=yes --log-target=stderr --load='module-native-protocol-tcp auth-ip-acl=127.0.0.1 port=4718 auth-anonymous=1' || true
 cd /opt/tx5dr/current
 node /opt/tx5dr/current/packages/server/dist/scripts/server-launcher.js /opt/tx5dr/current/packages/server/dist/index.js 2>&1 | sed -u 's/^/[server] /' &
@@ -729,10 +748,18 @@ for i in $(seq 1 80); do
 done
 pactl info >/dev/null
 pactl list short modules | awk '/TX5DRAndroid|AndroidSink|AndroidMic/ {print ${'$'}1}' | xargs -r -n1 pactl unload-module || true
-input_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidInput)
-input_source_module=$(pactl load-module module-remap-source master=TX5DRAndroidInput.monitor source_name=TX5DRAndroidUsbInput)
-output_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidOutput)
+input_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidInput rate=48000 channels=1 format=s16le)
+input_source_module=$(pactl load-module module-remap-source master=TX5DRAndroidInput.monitor source_name=TX5DRAndroidUsbInput rate=48000 channels=1)
+output_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidOutput rate=48000 channels=1 format=s16le)
 echo "pulse bridge modules: input_sink=${'$'}input_sink_module input_source=${'$'}input_source_module output_sink=${'$'}output_sink_module"
+pactl set-default-source TX5DRAndroidUsbInput
+pactl set-default-sink TX5DRAndroidOutput
+echo "pulse bridge info:"
+pactl info
+echo "pulse bridge sources:"
+pactl list short sources
+echo "pulse bridge sinks:"
+pactl list short sinks
 tx5dr-android-pulse-tcp tcp-to-sink 127.0.0.1 4719 TX5DRAndroidInput 2>&1 | sed -u 's/^/[audio-input] /' &
 input_pid=$!
 tx5dr-android-pulse-tcp source-to-tcp 127.0.0.1 4720 TX5DRAndroidOutput.monitor 2>&1 | sed -u 's/^/[audio-output] /' &
