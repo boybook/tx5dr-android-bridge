@@ -21,6 +21,30 @@ fi
 TMP="${TMPDIR:-/tmp}/tx5dr-proot.$$"
 mkdir -p "$TMP" "$(dirname "$OUT")" "$JNI_DIR"
 trap 'rm -rf "$TMP"' EXIT
+
+extract_deb_data() {
+  local deb="$1"
+  local out="$2"
+  local ar_dir="$out/ar"
+  local data_archive
+  rm -rf "$out"
+  mkdir -p "$ar_dir" "$out/data"
+  if command -v dpkg-deb >/dev/null 2>&1; then
+    dpkg-deb -x "$deb" "$out/data"
+    return
+  elif command -v bsdtar >/dev/null 2>&1; then
+    bsdtar -xf "$deb" -C "$ar_dir"
+  elif command -v ar >/dev/null 2>&1; then
+    (cd "$ar_dir" && ar -x "$deb")
+  else
+    echo "Need dpkg-deb, bsdtar, or ar to extract Debian package: $deb" >&2
+    exit 1
+  fi
+  data_archive="$(find "$ar_dir" -maxdepth 1 -name 'data.tar.*' | head -1)"
+  [ -n "$data_archive" ] || { echo "data.tar.* not found in $deb" >&2; exit 1; }
+  tar -xf "$data_archive" -C "$out/data"
+}
+
 downloaded=0
 for URL in "${URLS[@]}"; do
   echo "Trying $URL"
@@ -33,24 +57,21 @@ if [[ "$downloaded" != "1" ]]; then
   echo "Failed to download proot. Set PROOT_DEB_URL to a reachable aarch64 proot .deb." >&2
   exit 1
 fi
-(cd "$TMP" && tar -xf proot.deb)
-DATA="$(find "$TMP" -maxdepth 1 -name 'data.tar.*' | head -1)"
-[ -n "$DATA" ] || { echo "data.tar.* not found in deb" >&2; exit 1; }
-mkdir -p "$TMP/data"
-tar -xf "$DATA" -C "$TMP/data"
-cp "$TMP/data/data/data/com.termux/files/usr/bin/proot" "$OUT" 2>/dev/null \
-  || cp "$TMP/data/usr/bin/proot" "$OUT" 2>/dev/null \
-  || cp "$(find "$TMP/data" -type f -name proot | head -1)" "$OUT"
+extract_deb_data "$TMP/proot.deb" "$TMP/proot"
+PROOT_DATA="$TMP/proot/data"
+cp "$PROOT_DATA/data/data/com.termux/files/usr/bin/proot" "$OUT" 2>/dev/null \
+  || cp "$PROOT_DATA/usr/bin/proot" "$OUT" 2>/dev/null \
+  || cp "$(find "$PROOT_DATA" -type f -name proot | head -1)" "$OUT"
 chmod 0755 "$OUT"
 cp "$OUT" "$JNI_OUT"
 chmod 0755 "$JNI_OUT"
 
-cp "$TMP/data/data/data/com.termux/files/usr/libexec/proot/loader" "$JNI_DIR/libproot_loader.so" 2>/dev/null \
-  || cp "$TMP/data/usr/libexec/proot/loader" "$JNI_DIR/libproot_loader.so" 2>/dev/null \
-  || cp "$(find "$TMP/data" -type f -path '*/libexec/proot/loader' | head -1)" "$JNI_DIR/libproot_loader.so"
-cp "$TMP/data/data/data/com.termux/files/usr/libexec/proot/loader32" "$JNI_DIR/libproot_loader32.so" 2>/dev/null \
-  || cp "$TMP/data/usr/libexec/proot/loader32" "$JNI_DIR/libproot_loader32.so" 2>/dev/null \
-  || cp "$(find "$TMP/data" -type f -path '*/libexec/proot/loader32' | head -1)" "$JNI_DIR/libproot_loader32.so"
+cp "$PROOT_DATA/data/data/com.termux/files/usr/libexec/proot/loader" "$JNI_DIR/libproot_loader.so" 2>/dev/null \
+  || cp "$PROOT_DATA/usr/libexec/proot/loader" "$JNI_DIR/libproot_loader.so" 2>/dev/null \
+  || cp "$(find "$PROOT_DATA" -type f -path '*/libexec/proot/loader' | head -1)" "$JNI_DIR/libproot_loader.so"
+cp "$PROOT_DATA/data/data/com.termux/files/usr/libexec/proot/loader32" "$JNI_DIR/libproot_loader32.so" 2>/dev/null \
+  || cp "$PROOT_DATA/usr/libexec/proot/loader32" "$JNI_DIR/libproot_loader32.so" 2>/dev/null \
+  || cp "$(find "$PROOT_DATA" -type f -path '*/libexec/proot/loader32' | head -1)" "$JNI_DIR/libproot_loader32.so"
 chmod 0755 "$JNI_DIR/libproot_loader.so" "$JNI_DIR/libproot_loader32.so"
 
 TALLOC_URLS=("${LIBTALLOC_DEB_URL:-${DEFAULT_LIBTALLOC_URLS[0]}}")
@@ -69,13 +90,8 @@ if [[ "$downloaded" != "1" ]]; then
   echo "Failed to download libtalloc. Set LIBTALLOC_DEB_URL to a reachable aarch64 libtalloc .deb." >&2
   exit 1
 fi
-(cd "$TMP" && tar -xf libtalloc.deb)
-TALLOC_DATA="$(find "$TMP" -maxdepth 1 -name 'data.tar.*' | sort | tail -1)"
-[ -n "$TALLOC_DATA" ] || { echo "libtalloc data.tar.* not found in deb" >&2; exit 1; }
-rm -rf "$TMP/talloc-data"
-mkdir -p "$TMP/talloc-data"
-tar -xf "$TALLOC_DATA" -C "$TMP/talloc-data"
-TALLOC_SRC="$(find "$TMP/talloc-data" -type f -name 'libtalloc.so*' | head -1)"
+extract_deb_data "$TMP/libtalloc.deb" "$TMP/talloc"
+TALLOC_SRC="$(find "$TMP/talloc/data" -type f -name 'libtalloc.so*' | head -1)"
 [ -n "$TALLOC_SRC" ] || { echo "libtalloc.so not found in deb" >&2; exit 1; }
 # Gradle only packages native libraries named lib*.so, so the versioned SONAME
 # is recreated at runtime as libtalloc.so.2 -> nativeLibraryDir/libtalloc.so.
