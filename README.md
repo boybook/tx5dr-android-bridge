@@ -8,8 +8,9 @@ This project is intentionally a PoC and is not Play Store-ready. The first targe
 
 - Run a Debian 13 minbase rootfs inside Android app-private storage with PRoot.
 - Install TX-5DR portable Android runtime releases from a manifest URL.
-- Start the TX-5DR server on `127.0.0.1:4000` and the `client-tools` static/proxy service on `127.0.0.1:8076`.
+- Start the TX-5DR server on `127.0.0.1:4000` and the `client-tools` static/proxy service on `0.0.0.0:8076`.
 - Display the web UI in an Android WebView at `http://127.0.0.1:8076`.
+- Show LAN URLs discovered by Kotlin, such as `http://192.168.1.23:8076`, for same-Wi-Fi browser access.
 - Provide debug-only ADB commands for install/start/stop/log collection without touching the phone UI.
 - Experiment with Android microphone capture bridged into Linux PulseAudio inside PRoot.
 
@@ -30,6 +31,9 @@ Android app (Kotlin)
     - TX-5DR release install/update
     - PRoot process lifecycle
     - health checks for :4000 and :8076
+  NetworkAccessProvider
+    - Android ConnectivityManager LAN IPv4 discovery
+    - writes runtime/android-network-access.json for Node services
   MicBridge
     - Android AudioRecord PCM capture
     - local TCP PCM stream on 127.0.0.1:4719
@@ -46,9 +50,21 @@ PRoot Debian runtime
   /opt/tx5dr/current              active TX-5DR release
   /opt/tx5dr-data                 persistent data bind mount
   127.0.0.1:4000                  TX-5DR server
-  127.0.0.1:8076                  client-tools web proxy/static server
+  0.0.0.0:8076                    client-tools LAN web proxy/static server
   127.0.0.1:4718                  PulseAudio native TCP protocol
 ```
+
+LAN browser access uses `client-tools` as the only public entrypoint:
+
+```text
+LAN browser
+  -> http://phone-lan-ip:8076
+     client-tools in PRoot, HOST=0.0.0.0
+       -> http://127.0.0.1:4000
+          tx5dr-server in PRoot, TX5DR_SERVER_HOST=127.0.0.1
+```
+
+The Debian/Node side does not enumerate Android network interfaces. Kotlin writes `/opt/tx5dr-data/runtime/android-network-access.json`, and tx-5dr consumes it through `TX5DR_NETWORK_ACCESS_FILE`. This avoids Android/PRoot `uv_interface_addresses` permission failures while keeping desktop/Linux/macOS/Windows paths unchanged.
 
 ## Runtime Logic
 
@@ -56,8 +72,9 @@ PRoot Debian runtime
 2. The app downloads the configured runtime manifest, selects the `android` + `arm64` tarball, downloads it, checks `sha256`, then extracts it to `files/runtime/tx5dr/releases/<version>`.
 3. `files/runtime/tx5dr/current` is switched to the newly installed release. The symlink is relative (`releases/<version>`) so it remains visible after PRoot bind mounts `files/runtime/tx5dr` as `/opt/tx5dr`.
 4. `Start` prepares Android-side native host libraries, then launches PRoot with bind mounts for `/opt/tx5dr`, `/opt/tx5dr-data`, `/proc`, `/dev`, and `/sys`.
-5. Inside Debian, the startup script runs PulseAudio, starts the TX-5DR server, starts `client-tools`, and keeps the PRoot process alive until either child exits or Android sends stop.
-6. The Android side periodically health-checks `GET http://127.0.0.1:4000/api/hello` and `GET http://127.0.0.1:8076/`.
+5. Before startup, Kotlin refreshes `runtime/tx5dr-data/runtime/android-network-access.json` with LAN IPv4 addresses from Android `ConnectivityManager`.
+6. Inside Debian, the startup script runs PulseAudio, starts the TX-5DR server on loopback, starts `client-tools` on `0.0.0.0:8076`, and keeps the PRoot process alive until either child exits or Android sends stop.
+7. The Android side periodically health-checks `GET http://127.0.0.1:4000/api/hello` and `GET http://127.0.0.1:8076/`; LAN reachability is shown separately and does not affect local health.
 
 The Android runtime does not use `systemd` or `nginx`. Static web serving and API proxying are handled by `packages/client-tools/src/proxy.js`, matching the Electron-oriented client-tools path.
 
@@ -99,6 +116,13 @@ adb logcat -s Tx5drBridge RuntimeManager AudioBridge proot mic-linux
 ```
 
 If no device appears in `adb devices -l`, enable Developer Options and USB debugging on the phone, then accept the debugging authorization dialog.
+
+To inspect the LAN bridge state after starting the runtime:
+
+```bash
+adb shell run-as com.tx5dr.bridge cat files/runtime/tx5dr-data/runtime/android-network-access.json
+adb shell run-as com.tx5dr.bridge cat files/runtime/tx5dr-data/runtime/client-tools-ready.json
+```
 
 ## Runtime Manifest
 
@@ -211,3 +235,5 @@ If Pulse/RtAudio is unreliable on Android PRoot, the next phase should switch to
 - No background automatic updater or rollback UI yet.
 - USB serial/CW bridge is not implemented yet.
 - Rootfs and runtime assets are large; future work should consider asset delivery or differential updates.
+- LAN browser access requires the phone and client to be on the same reachable network; Wi-Fi AP isolation, cellular networks, VPNs, and aggressive vendor background limits can block inbound access.
+- LAN URLs never include the admin token. The embedded WebView uses local `127.0.0.1` with token injection, while LAN browsers must use the normal auth flow.

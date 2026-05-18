@@ -38,6 +38,7 @@ object BridgeRuntime {
         prefs = app.getSharedPreferences("bridge", Context.MODE_PRIVATE)
         paths = RuntimePaths(app.filesDir, File(app.applicationInfo.nativeLibraryDir))
         paths.ensureDirs()
+        NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile)
         updateStatus(detectInitialStatus())
     }
 
@@ -54,6 +55,24 @@ object BridgeRuntime {
 
     fun setManifestUrl(url: String) {
         prefs.edit().putString("manifestUrl", url.trim()).apply()
+    }
+
+    fun getAdminToken(): String? {
+        val candidates = listOf(
+            File(paths.dataDir, "config/.admin-token"),
+            File(paths.dataDir, ".admin-token")
+        )
+        return candidates.firstNotNullOfOrNull { file ->
+            try {
+                file.readText().trim().takeIf { it.isNotEmpty() }
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
+    fun refreshNetworkAccess(): NetworkAccessProvider.Snapshot {
+        return NetworkAccessProvider.writeSnapshot(app, paths.androidNetworkAccessFile)
     }
 
     fun installOrUpdate() {
@@ -76,6 +95,7 @@ object BridgeRuntime {
             if (prootProcess?.isAlive == true) return@execute
             try {
                 ensureBaseRuntime()
+                refreshNetworkAccess()
                 val missing = missingReleaseFiles(paths.currentLink)
                 require(missing.isEmpty()) { "TX-5DR is not installed or is incomplete (${missing.joinToString(", ")}). Install from manifest first." }
                 ensureProotVisibleCurrentLink()
@@ -286,6 +306,9 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export NODE_ENV=production
 export PORT=4000
 export HOST=127.0.0.1
+export TX5DR_RUNTIME_FLAVOR=android-bridge
+export TX5DR_SERVER_HOST=127.0.0.1
+export TX5DR_NETWORK_ACCESS_FILE=/opt/tx5dr-data/runtime/android-network-access.json
 export TX5DR_DATA_DIR=/opt/tx5dr-data
 export TX5DR_CONFIG_DIR=/opt/tx5dr-data/config
 export TX5DR_LOGS_DIR=/opt/tx5dr-data/logs
@@ -296,7 +319,7 @@ pulseaudio --exit-idle-time=-1 --daemonize=yes --log-target=stderr --load='modul
 cd /opt/tx5dr/current
 node /opt/tx5dr/current/packages/server/dist/scripts/server-launcher.js /opt/tx5dr/current/packages/server/dist/index.js 2>&1 | sed -u 's/^/[server] /' &
 server_pid=$!
-PORT=8076 HOST=127.0.0.1 TARGET=http://127.0.0.1:4000 STATIC_DIR=/opt/tx5dr/current/packages/web/dist TX5DR_CLIENT_TOOLS_READY_FILE=/opt/tx5dr-data/runtime/client-tools-ready.json TX5DR_CLIENT_TOOLS_LOG_FILE=/opt/tx5dr-data/logs/client-tools.log node packages/client-tools/src/proxy.js 2>&1 | sed -u 's/^/[client-tools] /' &
+PORT=8076 HOST=0.0.0.0 TARGET=http://127.0.0.1:4000 STATIC_DIR=/opt/tx5dr/current/packages/web/dist TX5DR_CLIENT_TOOLS_READY_FILE=/opt/tx5dr-data/runtime/client-tools-ready.json TX5DR_CLIENT_TOOLS_LOG_FILE=/opt/tx5dr-data/logs/client-tools.log node packages/client-tools/src/proxy.js 2>&1 | sed -u 's/^/[client-tools] /' &
 client_pid=$!
 trap 'kill ${'$'}server_pid ${'$'}client_pid 2>/dev/null || true; wait || true; exit 0' TERM INT
 wait -n ${'$'}server_pid ${'$'}client_pid
@@ -570,6 +593,7 @@ wait -n ${'$'}server_pid ${'$'}client_pid
         val prootTmpDir = File(workDir, "proot-tmp")
         val rootfsDir = File(workDir, "rootfs")
         val dataDir = File(workDir, "tx5dr-data")
+        val androidNetworkAccessFile = File(dataDir, "runtime/android-network-access.json")
         val txDir = File(workDir, "tx5dr")
         val releasesDir = File(txDir, "releases")
         val currentLink = File(txDir, "current")
