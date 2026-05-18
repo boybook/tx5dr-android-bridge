@@ -1,7 +1,10 @@
 package com.tx5dr.bridge
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.hardware.usb.UsbManager
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
@@ -42,7 +45,9 @@ object BridgeRuntime {
         paths = RuntimePaths(app.filesDir, File(app.applicationInfo.nativeLibraryDir))
         paths.ensureDirs()
         NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile)
+        AndroidUsbAudioBridge.startWatchingDevices(app)
         AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
+        registerUsbHotplugReceiver()
         updateStatus(detectInitialStatus())
     }
 
@@ -59,6 +64,41 @@ object BridgeRuntime {
 
     fun setManifestUrl(url: String) {
         prefs.edit().putString("manifestUrl", url.trim()).apply()
+    }
+
+    fun getPreference(key: String, defaultValue: Boolean): Boolean = prefs.getBoolean(key, defaultValue)
+
+    fun setPreference(key: String, value: Boolean) {
+        prefs.edit().putBoolean(key, value).apply()
+    }
+
+    fun snapshotStatus(): BridgeStatus = status
+
+    fun bootstrap() {
+        executor.execute {
+            try {
+                LogBus.i(TAG, "Bootstrap started")
+                refreshNetworkAccess()
+                if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
+                val initial = detectInitialStatus()
+                val runtimeState = if (prootProcess?.isAlive == true) RuntimeState.Running else initial.runtimeState
+                updateStatus(status.copy(runtimeState = runtimeState, installedVersion = initial.installedVersion, error = null))
+                if (runtimeState == RuntimeState.Installed && getPreference(PREF_AUTO_START_RUNTIME, true)) {
+                    main.post { start() }
+                }
+            } catch (error: Throwable) {
+                LogBus.e(TAG, "Bootstrap failed", error)
+                updateStatus(status.copy(runtimeState = RuntimeState.Error, error = error.message))
+            }
+        }
+    }
+
+    fun startBridges() {
+        executor.execute { startBridgesInternal() }
+    }
+
+    fun stopBridges() {
+        executor.execute { stopBridgesInternal() }
     }
 
     fun getAdminToken(): String? {
@@ -94,14 +134,31 @@ object BridgeRuntime {
         }
     }
 
+    fun fetchReleasePreview(manifestUrl: String, callback: (ReleasePreview?, String?) -> Unit) {
+        executor.execute {
+            try {
+                val manifest = JSONObject(downloadText(manifestUrl))
+                val asset = selectAndroidAsset(manifest)
+                val preview = ReleasePreview(
+                    version = manifest.optString("version", manifest.optString("commit", "unknown")),
+                    name = asset.optString("name", "TX-5DR Android runtime"),
+                    sizeBytes = asset.optLong("size", -1L),
+                    url = asset.optString("url_cn", asset.optString("url", asset.optString("url_oss"))),
+                )
+                main.post { callback(preview, null) }
+            } catch (error: Throwable) {
+                main.post { callback(null, error.message ?: error.javaClass.simpleName) }
+            }
+        }
+    }
+
     fun start() {
         executor.execute {
             if (prootProcess?.isAlive == true) return@execute
             try {
                 ensureBaseRuntime()
                 refreshNetworkAccess()
-                AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
-                AndroidUsbSerialBridge.start(app, paths.androidSerialDevicesFile)
+                if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
                 val missing = missingReleaseFiles(paths.currentLink)
                 require(missing.isEmpty()) { "TX-5DR is not installed or is incomplete (${missing.joinToString(", ")}). Install from manifest first." }
                 ensureProotVisibleCurrentLink()
@@ -140,6 +197,48 @@ object BridgeRuntime {
             stopAuxiliaryProcesses()
             healthRunning = false
             updateStatus(status.copy(runtimeState = RuntimeState.Stopped, serverHealthy = false, webHealthy = false))
+        }
+    }
+
+    private fun startBridgesInternal() {
+        AndroidUsbAudioBridge.startIfPermitted(app)
+        val serialStarted = AndroidUsbSerialBridge.startIfPermitted(app, paths.androidSerialDevicesFile)
+        if (serialStarted) startSerialPtyProcess()
+        LogBus.i(TAG, "Bridge bootstrap complete")
+    }
+
+    private fun stopBridgesInternal() {
+        AndroidUsbAudioBridge.stop()
+        AndroidUsbSerialBridge.stop()
+        stopSerialPtyProcess()
+        LogBus.i(TAG, "Bridge stop complete")
+    }
+
+    private fun registerUsbHotplugReceiver() {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val action = intent.action ?: return
+                if (action != UsbManager.ACTION_USB_DEVICE_ATTACHED && action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+                LogBus.i(TAG, "USB hotplug event: $action")
+                executor.execute {
+                    AndroidUsbAudioBridge.refreshDevices(app)
+                    AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
+                    if (action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
+                        AndroidUsbSerialBridge.stop()
+                    }
+                    if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            else @Suppress("DEPRECATION") app.registerReceiver(receiver, filter)
+        } catch (error: Throwable) {
+            LogBus.w(TAG, "Unable to register USB hotplug receiver: ${error.message}")
         }
     }
 
@@ -774,4 +873,10 @@ wait -n ${'$'}input_pid ${'$'}output_pid
         "usr/local/bin/tx5dr-android-pulse-tcp",
         "usr/local/bin/tx5dr-android-serial-pty",
     )
+
+    const val PREF_AUTO_START_RUNTIME = "autoStartRuntime"
+    const val PREF_AUTO_START_BRIDGES = "autoStartBridges"
+    const val PREF_AUTO_OPEN_WEBVIEW = "autoOpenWebView"
+    const val PREF_SERVICE_ONLY_MODE = "serviceOnlyMode"
+    const val PREF_KEEP_ALIVE_ENABLED = "keepAliveEnabled"
 }

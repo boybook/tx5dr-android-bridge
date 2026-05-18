@@ -140,6 +140,26 @@ object AndroidUsbSerialBridge {
         }
     }
 
+    fun startIfPermitted(context: Context? = null, targetFile: File? = null): Boolean {
+        val context = context ?: app ?: return false
+        val targetFile = targetFile ?: devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile
+        val appContext = context.applicationContext
+        val manager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager
+        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
+        if (driver == null) {
+            refreshDevices(appContext, targetFile)
+            update(status.copy(state = "no-device", error = null))
+            return false
+        }
+        refreshDevices(appContext, targetFile)
+        if (!manager.hasPermission(driver.device)) {
+            update(status.copy(state = "permission-required", error = null))
+            return false
+        }
+        start(appContext, targetFile)
+        return true
+    }
+
     fun stop() {
         running = false
         try { clientSocket?.close() } catch (_: Throwable) {}

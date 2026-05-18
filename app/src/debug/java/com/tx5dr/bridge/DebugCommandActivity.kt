@@ -19,6 +19,10 @@ class DebugCommandActivity : Activity() {
         }
 
         when (action) {
+            ACTION_BOOTSTRAP -> {
+                LogBus.i(TAG, "Debug bootstrap requested")
+                BridgeService.start(this, BridgeService.ACTION_BOOTSTRAP)
+            }
             ACTION_INSTALL -> {
                 LogBus.i(TAG, "Debug install/update requested")
                 BridgeService.start(this, BridgeService.ACTION_INSTALL)
@@ -30,6 +34,22 @@ class DebugCommandActivity : Activity() {
             ACTION_STOP -> {
                 LogBus.i(TAG, "Debug stop requested")
                 BridgeService.start(this, BridgeService.ACTION_STOP_RUNTIME)
+            }
+            ACTION_START_BRIDGES -> {
+                LogBus.i(TAG, "Debug bridge start requested")
+                BridgeService.start(this, BridgeService.ACTION_START_BRIDGES)
+            }
+            ACTION_STOP_BRIDGES -> {
+                LogBus.i(TAG, "Debug bridge stop requested")
+                BridgeService.start(this, BridgeService.ACTION_STOP_BRIDGES)
+            }
+            ACTION_KEEPALIVE_ON -> {
+                LogBus.i(TAG, "Debug keepalive on requested")
+                BridgeService.start(this, android.content.Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_SET_KEEPALIVE).putExtra(BridgeService.EXTRA_ENABLED, true))
+            }
+            ACTION_KEEPALIVE_OFF -> {
+                LogBus.i(TAG, "Debug keepalive off requested")
+                BridgeService.start(this, android.content.Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_SET_KEEPALIVE).putExtra(BridgeService.EXTRA_ENABLED, false))
             }
             ACTION_START_MIC -> {
                 LogBus.i(TAG, "Debug USB audio start requested")
@@ -59,9 +79,14 @@ class DebugCommandActivity : Activity() {
     companion object {
         private const val TAG = "Tx5drBridge"
         const val EXTRA_MANIFEST_URL = "manifest_url"
+        const val ACTION_BOOTSTRAP = "com.tx5dr.bridge.debug.BOOTSTRAP"
         const val ACTION_INSTALL = "com.tx5dr.bridge.debug.INSTALL"
         const val ACTION_START = "com.tx5dr.bridge.debug.START"
         const val ACTION_STOP = "com.tx5dr.bridge.debug.STOP"
+        const val ACTION_START_BRIDGES = "com.tx5dr.bridge.debug.START_BRIDGES"
+        const val ACTION_STOP_BRIDGES = "com.tx5dr.bridge.debug.STOP_BRIDGES"
+        const val ACTION_KEEPALIVE_ON = "com.tx5dr.bridge.debug.KEEPALIVE_ON"
+        const val ACTION_KEEPALIVE_OFF = "com.tx5dr.bridge.debug.KEEPALIVE_OFF"
         const val ACTION_START_MIC = "com.tx5dr.bridge.debug.START_MIC"
         const val ACTION_STOP_MIC = "com.tx5dr.bridge.debug.STOP_MIC"
         const val ACTION_START_USB_SERIAL = "com.tx5dr.bridge.debug.START_USB_SERIAL"

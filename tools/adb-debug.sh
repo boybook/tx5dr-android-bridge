@@ -15,9 +15,14 @@ Commands:
   devices                 List adb devices
   install-apk             Build and install debug APK with Gradle
   launch                  Open the normal TX-5DR UI
+  bootstrap               Run product bootstrap flow
   install-runtime [url]   Trigger Install/Update; optional manifest URL
   start                   Start PRoot runtime
   stop                    Stop PRoot runtime
+  start-bridges           Start USB audio/serial bridges when permissions already exist
+  stop-bridges            Stop USB audio/serial bridges
+  keepalive-on            Enable foreground keep-alive WakeLock
+  keepalive-off           Disable foreground keep-alive WakeLock
   start-usb-audio         Start Android USB audio bridge (RECORD_AUDIO must already be granted)
   stop-usb-audio          Stop Android USB audio bridge
   start-usb-serial        Start Android USB serial bridge and Linux PTY helper
@@ -84,6 +89,9 @@ case "${1:-}" in
   launch)
     "$ADB" shell am start -n "$PKG/.MainActivity"
     ;;
+  bootstrap)
+    run_debug_action com.tx5dr.bridge.debug.BOOTSTRAP
+    ;;
   install-runtime)
     if [[ -n "${2:-}" ]]; then
       run_debug_action com.tx5dr.bridge.debug.INSTALL --es manifest_url "$2"
@@ -96,6 +104,18 @@ case "${1:-}" in
     ;;
   stop)
     run_debug_action com.tx5dr.bridge.debug.STOP
+    ;;
+  start-bridges)
+    run_debug_action com.tx5dr.bridge.debug.START_BRIDGES
+    ;;
+  stop-bridges)
+    run_debug_action com.tx5dr.bridge.debug.STOP_BRIDGES
+    ;;
+  keepalive-on)
+    run_debug_action com.tx5dr.bridge.debug.KEEPALIVE_ON
+    ;;
+  keepalive-off)
+    run_debug_action com.tx5dr.bridge.debug.KEEPALIVE_OFF
     ;;
   start-usb-audio|start-mic)
     run_debug_action com.tx5dr.bridge.debug.START_MIC

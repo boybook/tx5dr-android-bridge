@@ -12,3 +12,10 @@ data class BridgeStatus(
     val progress: String? = null,
     val error: String? = null,
 )
+
+data class ReleasePreview(
+    val version: String,
+    val name: String,
+    val sizeBytes: Long,
+    val url: String,
+)

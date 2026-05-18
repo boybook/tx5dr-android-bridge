@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -12,6 +13,8 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.ArrayDeque
@@ -41,6 +44,7 @@ object AndroidUsbAudioBridge {
     private var outputThread: Thread? = null
     private var inputServer: ServerSocket? = null
     private var outputServer: ServerSocket? = null
+    @Volatile private var deviceCallbackRegistered = false
 
     fun addListener(listener: (UsbAudioStatus) -> Unit) {
         listeners.add(listener)
@@ -65,6 +69,40 @@ object AndroidUsbAudioBridge {
             .map { it.toBridgeDevice("output") }
         update(status.copy(inputDevices = inputs, outputDevices = outputs, error = null))
         return status
+    }
+
+    fun startWatchingDevices(context: Context) {
+        if (deviceCallbackRegistered || Build.VERSION.SDK_INT < 23) return
+        val app = context.applicationContext
+        val manager = app.getSystemService(AudioManager::class.java) ?: return
+        try {
+            manager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                    handleDeviceChange(app, "added", addedDevices)
+                }
+
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                    handleDeviceChange(app, "removed", removedDevices)
+                }
+            }, Handler(Looper.getMainLooper()))
+            deviceCallbackRegistered = true
+        } catch (error: Throwable) {
+            LogBus.w(TAG, "Unable to register audio device callback: ${error.message}")
+        }
+    }
+
+    fun startIfPermitted(context: Context): Boolean {
+        val refreshed = refreshDevices(context)
+        if (refreshed.inputDevices.isEmpty() && refreshed.outputDevices.isEmpty()) {
+            update(refreshed.copy(state = "no-device", error = null))
+            return false
+        }
+        if (!hasRecordPermission(context)) {
+            update(refreshed.copy(state = "permission-required", error = null))
+            return false
+        }
+        start(context)
+        return true
     }
 
     fun start(context: Context) {
@@ -92,6 +130,21 @@ object AndroidUsbAudioBridge {
         inputThread = null
         outputThread = null
         update(status.copy(state = "stopped"))
+    }
+
+    private fun handleDeviceChange(context: Context, reason: String, devices: Array<out AudioDeviceInfo>) {
+        val usbChanged = devices.any { it.isUsbAudioDevice() }
+        if (!usbChanged) return
+        LogBus.i(TAG, "USB audio device $reason")
+        refreshDevices(context)
+        if (running) {
+            Thread {
+                stop()
+                startIfPermitted(context)
+            }.also { it.name = "tx5dr-usb-audio-hotplug"; it.start() }
+        } else if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
+            startIfPermitted(context)
+        }
     }
 
     @SuppressLint("MissingPermission")
