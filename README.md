@@ -127,6 +127,21 @@ adb logcat -s Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-l
 
 If no device appears in `adb devices -l`, enable Developer Options and USB debugging on the phone, then accept the debugging authorization dialog.
 
+## GitHub Actions Release APK
+
+Pushes to `main` build a signed release APK with `.github/workflows/android-apk.yml`.
+
+The workflow does not commit generated runtime assets. It downloads Termux PRoot/zstd, builds the Debian 13 arm64 rootfs with Docker/QEMU on cache miss, then stores those generated files in the GitHub Actions cache. Use the manual `workflow_dispatch` input `force_rebuild_assets=true` when the Debian or Termux inputs need a forced refresh without changing scripts.
+
+Configure these repository secrets before relying on the release artifact:
+
+- `TX5DR_ANDROID_KEYSTORE_BASE64`: base64-encoded Android release keystore.
+- `TX5DR_ANDROID_KEYSTORE_PASSWORD`
+- `TX5DR_ANDROID_KEY_ALIAS`
+- `TX5DR_ANDROID_KEY_PASSWORD`
+
+CI sets `TX5DR_ANDROID_VERSION_CODE` from the GitHub run number and `TX5DR_ANDROID_VERSION_NAME` from the run number plus short commit SHA. Local debug builds keep the default `0.1.0-poc` version.
+
 To inspect the LAN bridge state after starting the runtime:
 
 ```bash

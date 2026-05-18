@@ -1,0 +1,187 @@
+name: Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_rebuild_assets:
+        description: Rebuild Debian rootfs and native assets instead of using cache
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build-release-apk:
+    name: Build signed release APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    env:
+      ASSET_CACHE_PREFIX: tx5dr-android-assets-${{ runner.os }}-${{ hashFiles('tools/build-rootfs.sh', 'tools/fetch-proot.sh', 'tools/fetch-zstd.sh', 'tools/tx5dr-android-*.c') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore generated runtime assets
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.force_rebuild_assets != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            app/src/main/assets/proot/proot-arm64
+            app/src/main/assets/proot/zstd-arm64
+            app/src/main/assets/proot/*.sha256
+            app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
+            app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz.sha256
+            app/src/main/jniLibs/arm64-v8a
+          key: ${{ env.ASSET_CACHE_PREFIX }}-current
+          restore-keys: |
+            ${{ env.ASSET_CACHE_PREFIX }}-
+
+      - name: Check generated runtime assets
+        id: generated-assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
+            app/src/main/jniLibs/arm64-v8a/libproot_exec.so
+            app/src/main/jniLibs/arm64-v8a/libzstd_exec.so
+            app/src/main/jniLibs/arm64-v8a/libtalloc.so
+          )
+          missing=0
+          for file in "${required[@]}"; do
+            if [[ ! -s "$file" ]]; then
+              echo "Missing generated asset: $file"
+              missing=1
+            fi
+          done
+          if [[ "$missing" == "0" ]]; then
+            echo "has_assets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_assets=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build generated runtime assets
+        if: ${{ inputs.force_rebuild_assets == true || steps.generated-assets.outputs.has_assets != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./tools/fetch-proot.sh
+          ./tools/fetch-zstd.sh
+          ./tools/build-rootfs.sh
+
+      - name: Verify generated runtime assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
+            app/src/main/jniLibs/arm64-v8a/libproot_exec.so
+            app/src/main/jniLibs/arm64-v8a/libzstd_exec.so
+            app/src/main/jniLibs/arm64-v8a/libtalloc.so
+          )
+          for file in "${required[@]}"; do
+            test -s "$file" || { echo "Missing generated asset after build: $file" >&2; exit 1; }
+            ls -lh "$file"
+          done
+
+      - name: Save generated runtime assets
+        if: ${{ inputs.force_rebuild_assets == true || steps.generated-assets.outputs.has_assets != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            app/src/main/assets/proot/proot-arm64
+            app/src/main/assets/proot/zstd-arm64
+            app/src/main/assets/proot/*.sha256
+            app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
+            app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz.sha256
+            app/src/main/jniLibs/arm64-v8a
+          key: ${{ env.ASSET_CACHE_PREFIX }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Prepare release signing keystore
+        shell: bash
+        env:
+          TX5DR_ANDROID_KEYSTORE_BASE64: ${{ secrets.TX5DR_ANDROID_KEYSTORE_BASE64 }}
+          TX5DR_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.TX5DR_ANDROID_KEYSTORE_PASSWORD }}
+          TX5DR_ANDROID_KEY_ALIAS: ${{ secrets.TX5DR_ANDROID_KEY_ALIAS }}
+          TX5DR_ANDROID_KEY_PASSWORD: ${{ secrets.TX5DR_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in TX5DR_ANDROID_KEYSTORE_BASE64 TX5DR_ANDROID_KEYSTORE_PASSWORD TX5DR_ANDROID_KEY_ALIAS TX5DR_ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required GitHub Secrets for release signing: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/tx5dr-release.jks"
+          printf '%s' "$TX5DR_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          test -s "$keystore"
+          echo "TX5DR_ANDROID_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+          echo "TX5DR_ANDROID_KEYSTORE_PASSWORD=$TX5DR_ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "TX5DR_ANDROID_KEY_ALIAS=$TX5DR_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "TX5DR_ANDROID_KEY_PASSWORD=$TX5DR_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Prepare APK version
+        id: apk-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA::7}"
+          echo "SHORT_SHA=$short_sha" >> "$GITHUB_ENV"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "TX5DR_ANDROID_VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "TX5DR_ANDROID_VERSION_NAME=0.1.0-main.${GITHUB_RUN_NUMBER}+${short_sha}" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        run: ./gradlew assembleRelease
+
+      - name: Collect APK artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          src="app/build/outputs/apk/release/app-release.apk"
+          test -s "$src" || { echo "Release APK not found: $src" >&2; exit 1; }
+          out="release-assets/TX-5DR-Android-Bridge-release-${GITHUB_RUN_NUMBER}-${SHORT_SHA}.apk"
+          cp "$src" "$out"
+          (cd release-assets && sha256sum *.apk > SHA256SUMS)
+          ls -lh release-assets
+          cat release-assets/SHA256SUMS
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TX-5DR-Android-Bridge-release-${{ github.run_number }}-${{ steps.apk-version.outputs.short_sha }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
