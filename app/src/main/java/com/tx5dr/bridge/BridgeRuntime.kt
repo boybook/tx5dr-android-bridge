@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.hardware.usb.UsbManager
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
@@ -53,7 +54,7 @@ object BridgeRuntime {
 
     fun addStatusListener(listener: (BridgeStatus) -> Unit) {
         listeners.add(listener)
-        listener(status)
+        runCatching { listener(status) }.onFailure { Log.w(TAG, "Status listener failed", it) }
     }
 
     fun removeStatusListener(listener: (BridgeStatus) -> Unit) {
@@ -221,12 +222,16 @@ object BridgeRuntime {
                 if (action != UsbManager.ACTION_USB_DEVICE_ATTACHED && action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
                 LogBus.i(TAG, "USB hotplug event: $action")
                 executor.execute {
-                    AndroidUsbAudioBridge.refreshDevices(app)
-                    AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
-                    if (action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
-                        AndroidUsbSerialBridge.stop()
+                    runCatching {
+                        AndroidUsbAudioBridge.refreshDevices(app)
+                        AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
+                        if (action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
+                            AndroidUsbSerialBridge.stop()
+                        }
+                        if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
+                    }.onFailure { error ->
+                        LogBus.e(TAG, "USB hotplug handling failed", error)
                     }
-                    if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
                 }
             }
         }
@@ -762,7 +767,15 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
 
     private fun pipeOutput(process: Process, prefix: String) {
         Thread {
-            process.inputStream.bufferedReader().useLines { lines -> lines.forEach { LogBus.i(prefix, it) } }
+            try {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { LogBus.i(prefix, it) }
+                }
+            } catch (error: Throwable) {
+                if (process.isAlive) {
+                    LogBus.w(TAG, "Output pipe for $prefix stopped unexpectedly: ${error.message}")
+                }
+            }
         }.start()
     }
 
@@ -811,7 +824,11 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
 
     private fun updateStatus(next: BridgeStatus) {
         status = next
-        main.post { listeners.forEach { it(next) } }
+        main.post {
+            listeners.forEach { listener ->
+                runCatching { listener(next) }.onFailure { Log.w(TAG, "Status listener failed", it) }
+            }
+        }
     }
 
     data class RuntimePaths(val base: File, val nativeLibDir: File) {

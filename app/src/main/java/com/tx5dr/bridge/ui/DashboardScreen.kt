@@ -300,6 +300,14 @@ private fun HeroStatusPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             when {
+                visual.busy -> {
+                    Button(onClick = {}, enabled = false, modifier = Modifier.widthIn(min = 156.dp)) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("启动服务")
+                    }
+                    TextButton(onClick = {}, enabled = false) { Text("更新") }
+                }
                 status.runtimeState == RuntimeState.NotInstalled -> {
                     Button(onClick = onInstallClick, modifier = Modifier.widthIn(min = 168.dp)) {
                         Icon(Icons.Filled.PowerSettingsNew, contentDescription = null)
@@ -314,9 +322,6 @@ private fun HeroStatusPanel(
                         Text("进入 TX-5DR")
                     }
                     IconButton(onClick = onStopRuntime) { Icon(Icons.Filled.Stop, contentDescription = "停止服务") }
-                }
-                status.runtimeState == RuntimeState.Installing || status.runtimeState == RuntimeState.Starting || status.runtimeState == RuntimeState.Stopping -> {
-                    TextButton(onClick = onShowDiagnostics) { Text("查看进度") }
                 }
                 status.runtimeState == RuntimeState.Error || status.error != null -> {
                     Button(onClick = onStartRuntime, modifier = Modifier.widthIn(min = 144.dp)) {

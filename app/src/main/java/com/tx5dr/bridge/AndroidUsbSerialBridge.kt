@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.util.Log
 import com.bg7yoz.ft8cn.serialport.UsbSerialPort
 import com.bg7yoz.ft8cn.serialport.UsbSerialProber
 import org.json.JSONArray
@@ -60,7 +61,7 @@ object AndroidUsbSerialBridge {
 
     fun addListener(listener: (UsbSerialStatus) -> Unit) {
         listeners.add(listener)
-        listener(status)
+        runCatching { listener(status) }.onFailure { Log.w(TAG, "USB serial listener failed", it) }
     }
 
     fun removeListener(listener: (UsbSerialStatus) -> Unit) {
@@ -308,7 +309,9 @@ object AndroidUsbSerialBridge {
 
     private fun update(next: UsbSerialStatus) {
         status = next
-        listeners.forEach { it(next) }
+        listeners.forEach { listener ->
+            runCatching { listener(next) }.onFailure { Log.w(TAG, "USB serial listener failed", it) }
+        }
         LogBus.i(TAG, "USB serial state=${next.state}, devices=${next.devices.size}, active=${next.activePath ?: "--"}${next.error?.let { ", error=$it" } ?: ""}")
     }
 }

@@ -15,6 +15,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.ArrayDeque
@@ -48,7 +49,7 @@ object AndroidUsbAudioBridge {
 
     fun addListener(listener: (UsbAudioStatus) -> Unit) {
         listeners.add(listener)
-        listener(status)
+        runCatching { listener(status) }.onFailure { Log.w(TAG, "USB audio listener failed", it) }
     }
 
     fun removeListener(listener: (UsbAudioStatus) -> Unit) {
@@ -139,11 +140,19 @@ object AndroidUsbAudioBridge {
         refreshDevices(context)
         if (running) {
             Thread {
-                stop()
-                startIfPermitted(context)
+                runCatching {
+                    stop()
+                    startIfPermitted(context)
+                }.onFailure { error ->
+                    LogBus.e(TAG, "USB audio hotplug restart failed", error)
+                    update(status.copy(state = "error", error = error.message))
+                }
             }.also { it.name = "tx5dr-usb-audio-hotplug"; it.start() }
         } else if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
-            startIfPermitted(context)
+            runCatching { startIfPermitted(context) }.onFailure { error ->
+                LogBus.e(TAG, "USB audio hotplug autostart failed", error)
+                update(status.copy(state = "error", error = error.message))
+            }
         }
     }
 
@@ -409,7 +418,9 @@ object AndroidUsbAudioBridge {
 
     private fun update(next: UsbAudioStatus) {
         status = next
-        listeners.forEach { it(next) }
+        listeners.forEach { listener ->
+            runCatching { listener(next) }.onFailure { Log.w(TAG, "USB audio listener failed", it) }
+        }
         LogBus.i(TAG, "USB audio state=${next.state}, inputs=${next.inputDevices.size}, outputs=${next.outputDevices.size}${next.error?.let { ", error=$it" } ?: ""}")
     }
 

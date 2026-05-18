@@ -52,14 +52,16 @@ class MainActivity : ComponentActivity() {
     private var nativeWebView: WebView? = null
 
     private val statusListener: (BridgeStatus) -> Unit = { status ->
-        bridgeStatus = status
-        if (status.serverHealthy && status.webHealthy && autoOpenWebView && !serviceOnlyMode && !webVisible && !webSuppressedForSession) {
-            openWebView()
+        runOnUiThread {
+            bridgeStatus = status
+            if (status.serverHealthy && status.webHealthy && autoOpenWebView && !serviceOnlyMode && !webVisible && !webSuppressedForSession) {
+                openWebView()
+            }
         }
     }
-    private val logListener: (String) -> Unit = { logs = it }
-    private val usbAudioListener: (UsbAudioStatus) -> Unit = { usbAudioStatus = it }
-    private val usbSerialListener: (UsbSerialStatus) -> Unit = { usbSerialStatus = it }
+    private val logListener: (String) -> Unit = { text -> runOnUiThread { logs = text } }
+    private val usbAudioListener: (UsbAudioStatus) -> Unit = { status -> runOnUiThread { usbAudioStatus = status } }
+    private val usbSerialListener: (UsbSerialStatus) -> Unit = { status -> runOnUiThread { usbSerialStatus = status } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -20,7 +20,7 @@ object LogBus {
 
     fun addListener(listener: (String) -> Unit) {
         listeners.add(listener)
-        listener(snapshot())
+        runCatching { listener(snapshot()) }.onFailure { Log.w("LogBus", "Log listener failed", it) }
     }
 
     fun removeListener(listener: (String) -> Unit) {
@@ -43,6 +43,10 @@ object LogBus {
             while (lines.size > MAX_LINES) lines.removeFirst()
             lines.joinToString("\n")
         }
-        main.post { listeners.forEach { it(text) } }
+        main.post {
+            listeners.forEach { listener ->
+                runCatching { listener(text) }.onFailure { Log.w("LogBus", "Log listener failed", it) }
+            }
+        }
     }
 }
