@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB Audio class devices. Android still owns routing through AudioRecord/AudioTrack. -->
+    <usb-device class="1" />
+
+    <!-- USB CDC ACM serial devices. -->
+    <usb-device class="2" />
+
+    <!-- ICOM radios with built-in USB CAT/audio. -->
+    <usb-device vendor-id="3110" />
+
+    <!-- FTDI serial adapters. -->
+    <usb-device vendor-id="1027" product-id="24577" />
+    <usb-device vendor-id="1027" product-id="24592" />
+    <usb-device vendor-id="1027" product-id="24593" />
+    <usb-device vendor-id="1027" product-id="24596" />
+    <usb-device vendor-id="1027" product-id="24597" />
+
+    <!-- Silicon Labs CP210x serial adapters. -->
+    <usb-device vendor-id="4292" product-id="60000" />
+    <usb-device vendor-id="4292" product-id="60016" />
+    <usb-device vendor-id="4292" product-id="60017" />
+
+    <!-- Prolific PL2303 variants. -->
+    <usb-device vendor-id="1659" product-id="8963" />
+    <usb-device vendor-id="1659" product-id="9123" />
+    <usb-device vendor-id="1659" product-id="9139" />
+    <usb-device vendor-id="1659" product-id="9155" />
+    <usb-device vendor-id="1659" product-id="9171" />
+    <usb-device vendor-id="1659" product-id="9187" />
+    <usb-device vendor-id="1659" product-id="9203" />
+
+    <!-- WCH CH34x serial adapters and Xiegu-style CDC variants. -->
+    <usb-device vendor-id="6790" product-id="21795" />
+    <usb-device vendor-id="6790" product-id="29986" />
+    <usb-device vendor-id="6790" product-id="29987" />
+    <usb-device vendor-id="6790" product-id="21970" />
+
+    <!-- Common embedded CDC implementations used by radios and control boards. -->
+    <usb-device vendor-id="1155" product-id="22336" />
+    <usb-device vendor-id="1155" product-id="22322" />
+    <usb-device vendor-id="1155" product-id="41804" />
+    <usb-device vendor-id="1155" product-id="61441" />
+    <usb-device vendor-id="22136" product-id="26505" />
+</resources>

@@ -21,12 +21,15 @@ object BridgeRuntime {
     private const val TAG = "RuntimeManager"
     private const val DEFAULT_MANIFEST_URL = "https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json"
     private val executor = Executors.newSingleThreadExecutor()
+    private val processMonitorExecutor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val listeners = CopyOnWriteArrayList<(BridgeStatus) -> Unit>()
 
     private lateinit var app: Context
     private lateinit var prefs: SharedPreferences
     private var prootProcess: Process? = null
+    private var audioBridgeProcess: Process? = null
+    private var serialPtyProcess: Process? = null
     private var healthRunning = false
     private var status = BridgeStatus()
 
@@ -39,6 +42,7 @@ object BridgeRuntime {
         paths = RuntimePaths(app.filesDir, File(app.applicationInfo.nativeLibraryDir))
         paths.ensureDirs()
         NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile)
+        AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
         updateStatus(detectInitialStatus())
     }
 
@@ -96,6 +100,8 @@ object BridgeRuntime {
             try {
                 ensureBaseRuntime()
                 refreshNetworkAccess()
+                AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
+                AndroidUsbSerialBridge.start(app, paths.androidSerialDevicesFile)
                 val missing = missingReleaseFiles(paths.currentLink)
                 require(missing.isEmpty()) { "TX-5DR is not installed or is incomplete (${missing.joinToString(", ")}). Install from manifest first." }
                 ensureProotVisibleCurrentLink()
@@ -110,12 +116,8 @@ object BridgeRuntime {
                 LogBus.i(TAG, "Started PRoot runtime")
                 updateStatus(status.copy(runtimeState = RuntimeState.Running))
                 startHealthLoop()
-                val exitCode = process.waitFor()
-                LogBus.w(TAG, "PRoot runtime exited with code $exitCode")
-                prootProcess = null
-                if (status.runtimeState != RuntimeState.Stopping) {
-                    updateStatus(status.copy(runtimeState = RuntimeState.Stopped, serverHealthy = false, webHealthy = false))
-                }
+                startSerialPtyProcess()
+                monitorRuntimeProcess(process)
             } catch (error: Throwable) {
                 LogBus.e(TAG, "Runtime start failed", error)
                 prootProcess = null
@@ -135,20 +137,30 @@ object BridgeRuntime {
                 }
             }
             prootProcess = null
+            stopAuxiliaryProcesses()
             healthRunning = false
             updateStatus(status.copy(runtimeState = RuntimeState.Stopped, serverHealthy = false, webHealthy = false))
         }
     }
 
     fun startLinuxMicSide() {
+        startLinuxAudioSide()
+    }
+
+    fun startLinuxAudioSide() {
         executor.execute {
             try {
+                if (audioBridgeProcess?.isAlive == true) return@execute
                 ensureBaseRuntime()
                 ensureHostRuntimeEnvironment()
                 val cmd = buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "HOME=/root", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "PULSE_SERVER=tcp:127.0.0.1:4718", "/bin/bash", "-lc", MIC_SCRIPT)
                 val p = newProotProcess(cmd).redirectErrorStream(true).start()
+                audioBridgeProcess = p
                 pipeOutput(p, "mic-linux")
-                LogBus.i(TAG, "Started Linux mic injector side")
+                LogBus.i(TAG, "Started Linux audio bridge side")
+                monitorAuxiliaryProcess("Linux audio bridge side", p) {
+                    if (audioBridgeProcess == p) audioBridgeProcess = null
+                }
             } catch (error: Throwable) {
                 LogBus.e(TAG, "Linux mic side failed", error)
             }
@@ -156,14 +168,36 @@ object BridgeRuntime {
     }
 
     fun stopLinuxMicSide() {
+        stopLinuxAudioSide()
+    }
+
+    fun stopLinuxAudioSide() {
         executor.execute {
             try {
+                audioBridgeProcess?.destroy()
+                audioBridgeProcess = null
                 ensureHostRuntimeEnvironment()
-                val cmd = buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-lc", "pkill -f tx5dr-android-mic-injector || true; pactl list short modules | awk '/AndroidSink|AndroidMic/ {print \\$1}' | xargs -r -n1 pactl unload-module || true")
+                val cmd = buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "PULSE_SERVER=tcp:127.0.0.1:4718", "/bin/bash", "-lc", "pkill tx5dr-android-pulse-tcp || true; pkill tx5dr-android-mic-injector || true; pactl list short modules | awk '/TX5DRAndroid|AndroidSink|AndroidMic/ {print \\$1}' | xargs -r -n1 pactl unload-module || true")
                 newProotProcess(cmd).redirectErrorStream(true).start().waitFor(5, TimeUnit.SECONDS)
             } catch (error: Throwable) {
-                LogBus.e(TAG, "Stop Linux mic side failed", error)
+                LogBus.e(TAG, "Stop Linux audio side failed", error)
             }
+        }
+    }
+
+    fun startLinuxSerialSide() {
+        executor.execute {
+            try {
+                startSerialPtyProcess()
+            } catch (error: Throwable) {
+                LogBus.e(TAG, "Linux serial PTY side failed", error)
+            }
+        }
+    }
+
+    fun stopLinuxSerialSide() {
+        executor.execute {
+            stopSerialPtyProcess()
         }
     }
 
@@ -174,18 +208,33 @@ object BridgeRuntime {
     }
 
     private fun ensureBaseRuntime() {
-        if (!paths.rootfsReady.exists()) {
+        val expectedRootfsSha = readAssetTextOrNull("rootfs/rootfs-debian13-arm64.tgz.sha256")?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+        if (!isBaseRuntimeCurrent(expectedRootfsSha)) {
+            if (paths.rootfsReady.exists()) {
+                logProgress("Embedded Debian rootfs changed or is missing bridge helpers; reinstalling base runtime")
+                paths.rootfsDir.deleteRecursively()
+                paths.rootfsDir.mkdirs()
+            }
             val archive = paths.cacheDir.resolve("rootfs-debian13-arm64.tgz")
             logProgress("Copying embedded Debian 13 rootfs asset")
             copyAsset("rootfs/rootfs-debian13-arm64.tgz", archive, executable = false)
             logProgress("Extracting rootfs archive; this can take several minutes")
             val progress = ExtractionProgress("Extracting rootfs", everyEntries = 5000, everyMs = 3000)
             TarZstExtractor.extract(archive, paths.rootfsDir, { name -> progress.onEntry(name) }, paths.zstdFile)
-            paths.rootfsReady.writeText(System.currentTimeMillis().toString())
+            paths.rootfsReady.writeText(expectedRootfsSha.ifBlank { System.currentTimeMillis().toString() })
             logProgress("Base Debian rootfs ready (${progress.count} entries)")
         } else {
             LogBus.i(TAG, "Base Debian rootfs already installed")
         }
+    }
+
+    private fun isBaseRuntimeCurrent(expectedRootfsSha: String): Boolean {
+        if (!paths.rootfsReady.exists()) return false
+        if (expectedRootfsSha.isNotBlank()) {
+            val installed = try { paths.rootfsReady.readText().trim() } catch (_: Throwable) { "" }
+            if (installed != expectedRootfsSha) return false
+        }
+        return ROOTFS_REQUIRED_FILES.all { File(paths.rootfsDir, it).exists() }
     }
 
     private fun installTx5drRelease(manifestUrl: String) {
@@ -300,7 +349,7 @@ object BridgeRuntime {
     private fun buildRuntimeCommand(): List<String> {
         val script = """
 set -e
-mkdir -p /opt/tx5dr-data/logs /opt/tx5dr-data/runtime /tmp/pulse
+mkdir -p /opt/tx5dr-data/logs /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /tmp/pulse
 export HOME=/root
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export NODE_ENV=production
@@ -309,6 +358,7 @@ export HOST=127.0.0.1
 export TX5DR_RUNTIME_FLAVOR=android-bridge
 export TX5DR_SERVER_HOST=127.0.0.1
 export TX5DR_NETWORK_ACCESS_FILE=/opt/tx5dr-data/runtime/android-network-access.json
+export TX5DR_ANDROID_SERIAL_DEVICES_FILE=/opt/tx5dr-data/runtime/android-serial-devices.json
 export TX5DR_DATA_DIR=/opt/tx5dr-data
 export TX5DR_CONFIG_DIR=/opt/tx5dr-data/config
 export TX5DR_LOGS_DIR=/opt/tx5dr-data/logs
@@ -325,6 +375,37 @@ trap 'kill ${'$'}server_pid ${'$'}client_pid 2>/dev/null || true; wait || true; 
 wait -n ${'$'}server_pid ${'$'}client_pid
 """.trimIndent()
         return buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "/bin/bash", "-lc", script)
+    }
+
+    private fun startSerialPtyProcess() {
+        if (serialPtyProcess?.isAlive == true) return
+        ensureBaseRuntime()
+        ensureHostRuntimeEnvironment()
+        val script = """
+set -e
+mkdir -p /opt/tx5dr-data/android-dev /opt/tx5dr-data/logs
+exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
+""".trimIndent()
+        val process = newProotProcess(buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-lc", script))
+            .redirectErrorStream(true)
+            .start()
+        serialPtyProcess = process
+        pipeOutput(process, "serial-pty")
+        LogBus.i(TAG, "Started Linux serial PTY helper")
+        monitorAuxiliaryProcess("Linux serial PTY helper", process) {
+            if (serialPtyProcess == process) serialPtyProcess = null
+        }
+    }
+
+    private fun stopAuxiliaryProcesses() {
+        audioBridgeProcess?.destroy()
+        audioBridgeProcess = null
+        stopSerialPtyProcess()
+    }
+
+    private fun stopSerialPtyProcess() {
+        serialPtyProcess?.destroy()
+        serialPtyProcess = null
     }
 
     private fun buildProotBaseCommand(): List<String> = listOf(
@@ -395,6 +476,12 @@ wait -n ${'$'}server_pid ${'$'}client_pid
         target.setReadable(true, false)
         target.setWritable(true, true)
         target.setExecutable(executable, false)
+    }
+
+    private fun readAssetTextOrNull(assetName: String): String? = try {
+        app.assets.open(assetName).bufferedReader().use { it.readText() }
+    } catch (_: Throwable) {
+        null
     }
 
     private fun downloadText(url: String): String {
@@ -561,6 +648,29 @@ wait -n ${'$'}server_pid ${'$'}client_pid
         }.start()
     }
 
+    private fun monitorRuntimeProcess(process: Process) {
+        processMonitorExecutor.execute {
+            val exitCode = process.waitFor()
+            LogBus.w(TAG, "PRoot runtime exited with code $exitCode")
+            if (prootProcess == process) {
+                prootProcess = null
+                healthRunning = false
+                stopAuxiliaryProcesses()
+                if (status.runtimeState != RuntimeState.Stopping) {
+                    updateStatus(status.copy(runtimeState = RuntimeState.Stopped, serverHealthy = false, webHealthy = false))
+                }
+            }
+        }
+    }
+
+    private fun monitorAuxiliaryProcess(label: String, process: Process, onExit: () -> Unit) {
+        Thread {
+            val exitCode = process.waitFor()
+            LogBus.w(TAG, "$label exited with code $exitCode")
+            onExit()
+        }.start()
+    }
+
     private fun startHealthLoop() {
         if (healthRunning) return
         healthRunning = true
@@ -594,6 +704,7 @@ wait -n ${'$'}server_pid ${'$'}client_pid
         val rootfsDir = File(workDir, "rootfs")
         val dataDir = File(workDir, "tx5dr-data")
         val androidNetworkAccessFile = File(dataDir, "runtime/android-network-access.json")
+        val androidSerialDevicesFile = File(dataDir, "runtime/android-serial-devices.json")
         val txDir = File(workDir, "tx5dr")
         val releasesDir = File(txDir, "releases")
         val currentLink = File(txDir, "current")
@@ -610,11 +721,30 @@ wait -n ${'$'}server_pid ${'$'}client_pid
     }
 
     private const val MIC_SCRIPT = """
-set -e
+set -u
 export PULSE_SERVER=tcp:127.0.0.1:4718
-pactl load-module module-null-sink sink_name=AndroidSink sink_properties=device.description=Android_Audio_Stream || true
-pactl load-module module-remap-source master=AndroidSink.monitor source_name=AndroidMic source_properties=device.description=Android_Virtual_Mic || true
-pkill -f tx5dr-android-mic-injector || true
-nohup tx5dr-android-mic-injector 127.0.0.1 4719 AndroidSink >/opt/tx5dr-data/logs/mic-injector.log 2>&1 &
+for i in $(seq 1 80); do
+  pactl info >/dev/null 2>&1 && break
+  sleep 0.25
+done
+pactl info >/dev/null
+pactl list short modules | awk '/TX5DRAndroid|AndroidSink|AndroidMic/ {print ${'$'}1}' | xargs -r -n1 pactl unload-module || true
+input_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidInput)
+input_source_module=$(pactl load-module module-remap-source master=TX5DRAndroidInput.monitor source_name=TX5DRAndroidUsbInput)
+output_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidOutput)
+echo "pulse bridge modules: input_sink=${'$'}input_sink_module input_source=${'$'}input_source_module output_sink=${'$'}output_sink_module"
+tx5dr-android-pulse-tcp tcp-to-sink 127.0.0.1 4719 TX5DRAndroidInput 2>&1 | sed -u 's/^/[audio-input] /' &
+input_pid=$!
+tx5dr-android-pulse-tcp source-to-tcp 127.0.0.1 4720 TX5DRAndroidOutput.monitor 2>&1 | sed -u 's/^/[audio-output] /' &
+output_pid=$!
+trap 'kill ${'$'}input_pid ${'$'}output_pid 2>/dev/null || true; wait || true; exit 0' TERM INT
+wait -n ${'$'}input_pid ${'$'}output_pid
 """
+
+    private val ROOTFS_REQUIRED_FILES = listOf(
+        "usr/bin/node",
+        "usr/local/bin/tx5dr-android-mic-injector",
+        "usr/local/bin/tx5dr-android-pulse-tcp",
+        "usr/local/bin/tx5dr-android-serial-pty",
+    )
 }

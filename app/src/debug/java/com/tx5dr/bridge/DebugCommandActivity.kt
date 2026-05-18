@@ -32,15 +32,25 @@ class DebugCommandActivity : Activity() {
                 BridgeService.start(this, BridgeService.ACTION_STOP_RUNTIME)
             }
             ACTION_START_MIC -> {
-                LogBus.i(TAG, "Debug mic start requested")
-                MicBridge.start(this)
+                LogBus.i(TAG, "Debug USB audio start requested")
+                AndroidUsbAudioBridge.start(this)
             }
             ACTION_STOP_MIC -> {
-                LogBus.i(TAG, "Debug mic stop requested")
-                MicBridge.stop()
+                LogBus.i(TAG, "Debug USB audio stop requested")
+                AndroidUsbAudioBridge.stop()
+            }
+            ACTION_START_USB_SERIAL -> {
+                LogBus.i(TAG, "Debug USB serial start requested")
+                AndroidUsbSerialBridge.start(this, BridgeRuntime.paths.androidSerialDevicesFile)
+                BridgeRuntime.startLinuxSerialSide()
+            }
+            ACTION_STOP_USB_SERIAL -> {
+                LogBus.i(TAG, "Debug USB serial stop requested")
+                AndroidUsbSerialBridge.stop()
+                BridgeRuntime.stopLinuxSerialSide()
             }
             ACTION_STATUS -> {
-                LogBus.i(TAG, "Debug status requested; logcat tags: Tx5drBridge RuntimeManager AudioBridge proot mic-linux")
+                LogBus.i(TAG, "Debug status requested; logcat tags: Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty")
             }
             else -> LogBus.w(TAG, "Unknown debug action: ${action.ifBlank { "<empty>" }}")
         }
@@ -54,6 +64,8 @@ class DebugCommandActivity : Activity() {
         const val ACTION_STOP = "com.tx5dr.bridge.debug.STOP"
         const val ACTION_START_MIC = "com.tx5dr.bridge.debug.START_MIC"
         const val ACTION_STOP_MIC = "com.tx5dr.bridge.debug.STOP_MIC"
+        const val ACTION_START_USB_SERIAL = "com.tx5dr.bridge.debug.START_USB_SERIAL"
+        const val ACTION_STOP_USB_SERIAL = "com.tx5dr.bridge.debug.STOP_USB_SERIAL"
         const val ACTION_STATUS = "com.tx5dr.bridge.debug.STATUS"
     }
 }

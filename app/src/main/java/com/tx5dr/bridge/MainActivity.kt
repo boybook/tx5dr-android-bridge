@@ -28,27 +28,51 @@ class MainActivity : Activity() {
     private lateinit var mainContent: LinearLayout
     private lateinit var closeWebButton: TextView
     private lateinit var micButton: Button
+    private lateinit var usbAudioText: TextView
+    private lateinit var usbSerialText: TextView
+    private lateinit var serialButton: Button
     private var micWanted = false
+    private var pendingLogRefresh = false
+    private var latestStatus = BridgeStatus()
+    private var latestUsbAudioStatus = UsbAudioStatus()
+    private var latestUsbSerialStatus = UsbSerialStatus()
 
-    private val statusListener: (BridgeStatus) -> Unit = { runOnUiThread { renderStatus(it) } }
+    private val statusListener: (BridgeStatus) -> Unit = {
+        latestStatus = it
+        runOnUiThread { if (!isWebVisible()) renderStatus(it) }
+    }
     private lateinit var logScroll: ScrollView
 
     private val logListener: (String) -> Unit = {
         runOnUiThread {
+            if (isWebVisible()) {
+                pendingLogRefresh = true
+                return@runOnUiThread
+            }
             logText.text = it
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
         }
     }
-    private val micListener: (MicBridgeState) -> Unit = { runOnUiThread { micButton.text = if (it == MicBridgeState.Streaming || it == MicBridgeState.Starting) "Stop Mic Bridge" else "Start Mic Bridge" } }
+    private val usbAudioListener: (UsbAudioStatus) -> Unit = {
+        latestUsbAudioStatus = it
+        runOnUiThread { if (!isWebVisible()) renderUsbAudio(it) }
+    }
+    private val usbSerialListener: (UsbSerialStatus) -> Unit = {
+        latestUsbSerialStatus = it
+        runOnUiThread { if (!isWebVisible()) renderUsbSerial(it) }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
         BridgeRuntime.addStatusListener(statusListener)
         LogBus.addListener(logListener)
-        MicBridge.addListener(micListener)
+        AndroidUsbAudioBridge.addListener(usbAudioListener)
+        AndroidUsbSerialBridge.addListener(usbSerialListener)
         LogBus.i("Tx5drBridge", "MainActivity created")
         refreshLanUrls()
+        AndroidUsbAudioBridge.refreshDevices(this)
+        AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
     }
 
     override fun onResume() {
@@ -59,7 +83,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         BridgeRuntime.removeStatusListener(statusListener)
         LogBus.removeListener(logListener)
-        MicBridge.removeListener(micListener)
+        AndroidUsbAudioBridge.removeListener(usbAudioListener)
+        AndroidUsbSerialBridge.removeListener(usbSerialListener)
         super.onDestroy()
     }
 
@@ -78,18 +103,23 @@ class MainActivity : Activity() {
         val installButton = Button(this).apply { text = "Install/Update"; setOnClickListener { saveManifest(); LogBus.i("Tx5drBridge", "Install/Update requested"); BridgeService.start(this@MainActivity, BridgeService.ACTION_INSTALL) } }
         val startButton = Button(this).apply { text = "Start"; setOnClickListener { saveManifest(); LogBus.i("Tx5drBridge", "Start requested"); BridgeService.start(this@MainActivity, BridgeService.ACTION_START_RUNTIME) } }
         val stopButton = Button(this).apply { text = "Stop"; setOnClickListener { LogBus.i("Tx5drBridge", "Stop requested"); BridgeService.start(this@MainActivity, BridgeService.ACTION_STOP_RUNTIME) } }
-        micButton = Button(this).apply { text = "Start Mic Bridge"; setOnClickListener { toggleMic() } }
-        listOf(installButton, startButton, stopButton, micButton).forEach { buttons.addView(it, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)) }
+        micButton = Button(this).apply { text = "Start USB Audio"; setOnClickListener { toggleMic() } }
+        serialButton = Button(this).apply { text = "Start USB Serial"; setOnClickListener { toggleSerial() } }
+        listOf(installButton, startButton, stopButton).forEach { buttons.addView(it, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)) }
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             webViewClient = WebViewClient()
+            isFocusable = true
+            isFocusableInTouchMode = true
             visibility = View.GONE
         }
         val webButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         webButtons.addView(Button(this).apply { text = "Open Web"; setOnClickListener { openWebView() } }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
+        usbAudioText = TextView(this).apply { textSize = 12f; typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }
+        usbSerialText = TextView(this).apply { textSize = 12f; typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }
         logText = TextView(this).apply { textSize = 11f; typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }
         logScroll = ScrollView(this).apply { addView(logText) }
 
@@ -98,6 +128,12 @@ class MainActivity : Activity() {
         mainContent.addView(lanText)
         mainContent.addView(manifestInput)
         mainContent.addView(buttons)
+        mainContent.addView(TextView(this).apply { text = "USB Audio"; typeface = Typeface.DEFAULT_BOLD })
+        mainContent.addView(usbAudioText)
+        mainContent.addView(LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; addView(Button(this@MainActivity).apply { text = "Refresh USB Audio"; setOnClickListener { AndroidUsbAudioBridge.refreshDevices(this@MainActivity) } }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); addView(micButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)) })
+        mainContent.addView(TextView(this).apply { text = "USB Serial"; typeface = Typeface.DEFAULT_BOLD })
+        mainContent.addView(usbSerialText)
+        mainContent.addView(LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; addView(Button(this@MainActivity).apply { text = "Refresh USB Serial"; setOnClickListener { AndroidUsbSerialBridge.refreshDevices(this@MainActivity, BridgeRuntime.paths.androidSerialDevicesFile) } }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)); addView(serialButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)) })
         mainContent.addView(webButtons)
         mainContent.addView(logScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
@@ -112,6 +148,8 @@ class MainActivity : Activity() {
                 setColor(Color.argb(225, 24, 28, 33))
             }
             elevation = dp(8).toFloat()
+            isFocusable = false
+            isFocusableInTouchMode = false
             visibility = View.GONE
             setOnClickListener { closeWebView() }
         }
@@ -136,10 +174,12 @@ class MainActivity : Activity() {
             .appendQueryParameter("auth_token", token)
             .build()
             .toString()
-        LogBus.i("Tx5drBridge", "Opening WebView with admin token")
         mainContent.visibility = View.GONE
         webView.visibility = View.VISIBLE
         closeWebButton.visibility = View.VISIBLE
+        webView.requestFocus(View.FOCUS_DOWN)
+        webView.requestFocusFromTouch()
+        LogBus.i("Tx5drBridge", "Opening WebView with admin token")
         webView.loadUrl(url)
     }
 
@@ -148,6 +188,18 @@ class MainActivity : Activity() {
         webView.visibility = View.GONE
         closeWebButton.visibility = View.GONE
         mainContent.visibility = View.VISIBLE
+        renderStatus(latestStatus)
+        renderUsbAudio(latestUsbAudioStatus)
+        renderUsbSerial(latestUsbSerialStatus)
+        if (pendingLogRefresh) {
+            logText.text = LogBus.snapshot()
+            logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+            pendingLogRefresh = false
+        }
+    }
+
+    private fun isWebVisible(): Boolean {
+        return this::webView.isInitialized && webView.visibility == View.VISIBLE
     }
 
     private fun saveManifest() {
@@ -175,19 +227,49 @@ class MainActivity : Activity() {
     }
 
     private fun toggleMic() {
-        if (!MicBridge.hasPermission(this)) {
+        if (!AndroidUsbAudioBridge.hasRecordPermission(this)) {
             micWanted = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_RECORD_AUDIO)
             return
         }
-        if (micButton.text.toString().startsWith("Stop")) MicBridge.stop() else MicBridge.start(this)
+        if (micButton.text.toString().startsWith("Stop")) AndroidUsbAudioBridge.stop() else AndroidUsbAudioBridge.start(this)
+    }
+
+    private fun toggleSerial() {
+        if (serialButton.text.toString().startsWith("Stop")) {
+            AndroidUsbSerialBridge.stop()
+            BridgeRuntime.stopLinuxSerialSide()
+        } else {
+            AndroidUsbSerialBridge.start(this, BridgeRuntime.paths.androidSerialDevicesFile)
+            BridgeRuntime.startLinuxSerialSide()
+        }
+    }
+
+    private fun renderUsbAudio(status: UsbAudioStatus) {
+        micButton.text = if (status.state == "streaming" || status.state == "starting") "Stop USB Audio" else "Start USB Audio"
+        usbAudioText.text = buildString {
+            append("State: ${status.state}\n")
+            append("Inputs: ${if (status.inputDevices.isEmpty()) "--" else status.inputDevices.joinToString { it.name }}\n")
+            append("Outputs: ${if (status.outputDevices.isEmpty()) "--" else status.outputDevices.joinToString { it.name }}")
+            if (status.error != null) append("\nError: ${status.error}")
+        }
+    }
+
+    private fun renderUsbSerial(status: UsbSerialStatus) {
+        serialButton.text = if (status.state == "connected" || status.state == "waiting-helper" || status.state == "starting") "Stop USB Serial" else "Start USB Serial"
+        usbSerialText.text = buildString {
+            append("State: ${status.state}\n")
+            append("Active: ${status.activePath ?: "--"}\n")
+            if (status.devices.isEmpty()) append("Devices: --") else append(status.devices.joinToString("\n") { "${it.path} ${it.name} vid=${it.vendorId.toString(16)} pid=${it.productId.toString(16)} granted=${it.granted}" })
+            if (status.error != null) append("\nError: ${status.error}")
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_RECORD_AUDIO && micWanted) {
             micWanted = false
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) MicBridge.start(this) else LogBus.w("AudioBridge", "Microphone permission denied")
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) AndroidUsbAudioBridge.start(this) else LogBus.w("AudioBridge", "Microphone permission denied")
         }
     }
 
