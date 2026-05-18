@@ -21,8 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
-    env:
-      ASSET_CACHE_PREFIX: tx5dr-android-assets-${{ runner.os }}-${{ hashFiles('tools/build-rootfs.sh', 'tools/fetch-proot.sh', 'tools/fetch-zstd.sh', 'tools/tx5dr-android-*.c') }}
 
     steps:
       - name: Checkout
@@ -49,7 +47,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Restore generated runtime assets
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.force_rebuild_assets != true }}
+        if: ${{ github.event.inputs.force_rebuild_assets != 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -59,9 +57,9 @@ jobs:
             app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
             app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz.sha256
             app/src/main/jniLibs/arm64-v8a
-          key: ${{ env.ASSET_CACHE_PREFIX }}-current
+          key: tx5dr-android-assets-${{ runner.os }}-${{ hashFiles('tools/build-rootfs.sh', 'tools/fetch-proot.sh', 'tools/fetch-zstd.sh', 'tools/tx5dr-android-*.c') }}-current
           restore-keys: |
-            ${{ env.ASSET_CACHE_PREFIX }}-
+            tx5dr-android-assets-${{ runner.os }}-${{ hashFiles('tools/build-rootfs.sh', 'tools/fetch-proot.sh', 'tools/fetch-zstd.sh', 'tools/tx5dr-android-*.c') }}-
 
       - name: Check generated runtime assets
         id: generated-assets
@@ -88,7 +86,7 @@ jobs:
           fi
 
       - name: Build generated runtime assets
-        if: ${{ inputs.force_rebuild_assets == true || steps.generated-assets.outputs.has_assets != 'true' }}
+        if: ${{ github.event.inputs.force_rebuild_assets == 'true' || steps.generated-assets.outputs.has_assets != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -112,7 +110,7 @@ jobs:
           done
 
       - name: Save generated runtime assets
-        if: ${{ inputs.force_rebuild_assets == true || steps.generated-assets.outputs.has_assets != 'true' }}
+        if: ${{ github.event.inputs.force_rebuild_assets == 'true' || steps.generated-assets.outputs.has_assets != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -122,7 +120,7 @@ jobs:
             app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
             app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz.sha256
             app/src/main/jniLibs/arm64-v8a
-          key: ${{ env.ASSET_CACHE_PREFIX }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: tx5dr-android-assets-${{ runner.os }}-${{ hashFiles('tools/build-rootfs.sh', 'tools/fetch-proot.sh', 'tools/fetch-zstd.sh', 'tools/tx5dr-android-*.c') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Prepare release signing keystore
         shell: bash
