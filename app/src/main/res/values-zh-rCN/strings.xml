@@ -51,6 +51,7 @@
     <string name="access_fallback">可连接手机热点或同一 Wi-Fi 后访问</string>
     <string name="cd_copy_address">复制地址</string>
     <string name="cd_diagnostics_settings">诊断与设置</string>
+    <string name="cd_more_actions">更多操作</string>
 
     <string name="radio_connection">电台连接</string>
     <string name="audio_route">音频路由</string>
@@ -91,12 +92,16 @@
     <string name="release_preview_loading">正在读取版本和体积...</string>
 
     <string name="diagnostics_settings">诊断与设置</string>
+    <string name="settings">设置</string>
     <string name="recent_error">最近错误</string>
     <string name="auto_enter_tx5dr">启动后自动进入 TX-5DR</string>
     <string name="auto_enter_tx5dr_subtitle">关闭后仅运行后台服务。</string>
     <string name="manifest_url">Manifest URL</string>
     <string name="refresh_lan">刷新 LAN</string>
+    <string name="refresh_lan_subtitle">更新热点和局域网访问地址。</string>
     <string name="install_update">安装/更新</string>
+    <string name="install_update_subtitle">检查并安装 Android 运行环境。</string>
+    <string name="battery_optimization_subtitle">打开系统设置，适合长时间前台值守。</string>
     <string name="runtime_logs">运行日志</string>
     <string name="no_logs">暂无日志</string>
 

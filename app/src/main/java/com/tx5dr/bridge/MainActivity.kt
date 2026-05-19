@@ -43,7 +43,8 @@ class MainActivity : ComponentActivity() {
     private var showInstallDialog by mutableStateOf(false)
     private var releasePreview by mutableStateOf<ReleasePreview?>(null)
     private var releasePreviewError by mutableStateOf<String?>(null)
-    private var showDiagnosticsSheet by mutableStateOf(false)
+    private var showLogSheet by mutableStateOf(false)
+    private var showSettingsSheet by mutableStateOf(false)
     private var webVisible by mutableStateOf(false)
     private var webSuppressedForSession by mutableStateOf(false)
     private var micWanted = false
@@ -90,7 +91,8 @@ class MainActivity : ComponentActivity() {
                     showInstallDialog = showInstallDialog,
                     releasePreview = releasePreview,
                     releasePreviewError = releasePreviewError,
-                    showDiagnosticsSheet = showDiagnosticsSheet,
+                    showLogSheet = showLogSheet,
+                    showSettingsSheet = showSettingsSheet,
                     controlSystemBars = !webVisible,
                     onInstallClick = { prepareInstallDialog() },
                     onConfirmInstall = { showInstallDialog = false; startInstall() },
@@ -105,8 +107,10 @@ class MainActivity : ComponentActivity() {
                     onSetKeepAlive = { setKeepAlive(it) },
                     onOpenBatterySettings = { openBatterySettings() },
                     onRefreshBridges = { BridgeService.start(this@MainActivity, BridgeService.ACTION_START_BRIDGES) },
-                    onShowDiagnostics = { showDiagnosticsSheet = true },
-                    onDismissDiagnostics = { showDiagnosticsSheet = false },
+                    onShowLogs = { showLogSheet = true },
+                    onDismissLogs = { showLogSheet = false },
+                    onShowSettings = { showSettingsSheet = true },
+                    onDismissSettings = { showSettingsSheet = false },
                     onCopyText = { copyToClipboard(it) },
                     onRefreshLan = { refreshLanUrls() },
                     onManifestUrlChange = {

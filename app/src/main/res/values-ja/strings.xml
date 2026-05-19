@@ -51,6 +51,7 @@
     <string name="access_fallback">スマートフォンのホットスポットまたは同じ Wi-Fi からアクセスできます。</string>
     <string name="cd_copy_address">アドレスをコピー</string>
     <string name="cd_diagnostics_settings">診断と設定</string>
+    <string name="cd_more_actions">その他の操作</string>
 
     <string name="radio_connection">無線機接続</string>
     <string name="audio_route">オーディオ経路</string>
@@ -91,12 +92,16 @@
     <string name="release_preview_loading">バージョンとサイズを読み取り中...</string>
 
     <string name="diagnostics_settings">診断と設定</string>
+    <string name="settings">設定</string>
     <string name="recent_error">最近のエラー</string>
     <string name="auto_enter_tx5dr">起動後に自動で TX-5DR に入る</string>
     <string name="auto_enter_tx5dr_subtitle">オフの場合はバックグラウンドサービスのみ実行します。</string>
     <string name="manifest_url">Manifest URL</string>
     <string name="refresh_lan">LAN を更新</string>
+    <string name="refresh_lan_subtitle">ホットスポットと LAN のアクセスアドレスを更新します。</string>
     <string name="install_update">インストール / 更新</string>
+    <string name="install_update_subtitle">Android runtime パッケージを確認してインストールします。</string>
+    <string name="battery_optimization_subtitle">長時間の常駐利用向けにシステム設定を開きます。</string>
     <string name="runtime_logs">実行ログ</string>
     <string name="no_logs">ログはまだありません</string>
 

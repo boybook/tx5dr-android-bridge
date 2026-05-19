@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,6 +47,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -64,6 +67,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.tx5dr.bridge.AudioRoute
 import com.tx5dr.bridge.BridgeStatus
 import com.tx5dr.bridge.R
@@ -105,7 +110,8 @@ fun DashboardScreen(
     showInstallDialog: Boolean,
     releasePreview: ReleasePreview?,
     releasePreviewError: String?,
-    showDiagnosticsSheet: Boolean,
+    showLogSheet: Boolean,
+    showSettingsSheet: Boolean,
     controlSystemBars: Boolean = true,
     onInstallClick: () -> Unit,
     onConfirmInstall: () -> Unit,
@@ -120,8 +126,10 @@ fun DashboardScreen(
     onSetKeepAlive: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
     onOpenBatterySettings: () -> Unit,
-    onShowDiagnostics: () -> Unit,
-    onDismissDiagnostics: () -> Unit,
+    onShowLogs: () -> Unit,
+    onDismissLogs: () -> Unit,
+    onShowSettings: () -> Unit,
+    onDismissSettings: () -> Unit,
     onCopyText: (String) -> Unit,
     onRefreshLan: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
@@ -129,6 +137,7 @@ fun DashboardScreen(
     onServiceOnlyModeChange: (Boolean) -> Unit,
 ) {
     var detailSheet by remember { mutableStateOf<DetailSheet?>(null) }
+    var overflowExpanded by remember { mutableStateOf(false) }
 
     Tx5drTheme(controlSystemBars = controlSystemBars) {
         Surface(Modifier.fillMaxSize()) {
@@ -151,8 +160,29 @@ fun DashboardScreen(
                             )
                         },
                         actions = {
-                            IconButton(onClick = onShowDiagnostics) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.cd_diagnostics_settings))
+                            Box {
+                                IconButton(onClick = { overflowExpanded = true }) {
+                                    Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.cd_more_actions))
+                                }
+                                DropdownMenu(
+                                    expanded = overflowExpanded,
+                                    onDismissRequest = { overflowExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.runtime_logs)) },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            onShowLogs()
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.settings)) },
+                                        onClick = {
+                                            overflowExpanded = false
+                                            onShowSettings()
+                                        },
+                                    )
+                                }
                             }
                         },
                     )
@@ -170,7 +200,7 @@ fun DashboardScreen(
                         onStartRuntime = onStartRuntime,
                         onStopRuntime = onStopRuntime,
                         onOpenWebView = onOpenWebView,
-                        onShowDiagnostics = onShowDiagnostics,
+                        onShowDiagnostics = onShowLogs,
                         onCopyText = onCopyText,
                         onAudioClick = { detailSheet = DetailSheet.Audio },
                         onSerialClick = { detailSheet = DetailSheet.Serial },
@@ -195,13 +225,19 @@ fun DashboardScreen(
                 )
             }
 
-            if (showDiagnosticsSheet) {
-                DiagnosticsSheet(
+            if (showLogSheet) {
+                LogsSheet(
                     bridgeStatus = bridgeStatus,
                     logs = logs,
+                    onDismiss = onDismissLogs,
+                )
+            }
+
+            if (showSettingsSheet) {
+                SettingsSheet(
                     manifestUrl = manifestUrl,
                     autoOpenWebView = autoOpenWebView,
-                    onDismiss = onDismissDiagnostics,
+                    onDismiss = onDismissSettings,
                     onManifestUrlChange = onManifestUrlChange,
                     onAutoOpenWebViewChange = onAutoOpenWebViewChange,
                     onServiceOnlyModeChange = onServiceOnlyModeChange,
@@ -220,7 +256,7 @@ fun DashboardScreen(
                     onSetOutputRoute = onSetAudioOutputRoute,
                     onShowDiagnostics = {
                         detailSheet = null
-                        onShowDiagnostics()
+                        onShowLogs()
                     },
                 )
                 DetailSheet.Serial -> SerialDetailSheet(
@@ -229,7 +265,7 @@ fun DashboardScreen(
                     onStartSerial = onStartSerial,
                     onShowDiagnostics = {
                         detailSheet = null
-                        onShowDiagnostics()
+                        onShowLogs()
                     },
                 )
                 null -> Unit
@@ -704,9 +740,83 @@ private fun InstallRuntimeDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DiagnosticsSheet(
+private fun LogsSheet(
     bridgeStatus: BridgeStatus,
     logs: String,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        val logScrollState = rememberScrollState()
+        LaunchedEffect(Unit) {
+            logScrollState.scrollTo(logScrollState.maxValue)
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(stringResource(R.string.runtime_logs), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            bridgeStatus.error?.let {
+                Card(Modifier.fillMaxWidth()) {
+                    ListItem(
+                        leadingContent = { Icon(Icons.Filled.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                        headlineContent = { Text(stringResource(R.string.recent_error)) },
+                        supportingContent = { Text(it) },
+                    )
+                }
+            }
+            Surface(
+                Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.78f)
+                    .heightIn(min = 460.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .verticalScroll(logScrollState),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    val lines = logs.lines().ifEmpty { listOf(stringResource(R.string.no_logs)) }
+                    lines.forEach { line ->
+                        LogLine(line)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun LogLine(line: String) {
+    Text(
+        line.ifEmpty { " " },
+        fontFamily = FontFamily.Monospace,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        color = logLineColor(line),
+    )
+}
+
+@Composable
+private fun logLineColor(line: String): Color {
+    val upper = line.uppercase()
+    return when {
+        "[ERROR]" in upper || " ERROR " in upper || "EXCEPTION" in upper || "FAILED" in upper ->
+            MaterialTheme.colorScheme.error
+        "[WARN]" in upper || " WARN " in upper || "WARNING" in upper ->
+            MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsSheet(
     manifestUrl: String,
     autoOpenWebView: Boolean,
     onDismiss: () -> Unit,
@@ -725,21 +835,8 @@ private fun DiagnosticsSheet(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(stringResource(R.string.diagnostics_settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            bridgeStatus.error?.let {
-                Card(Modifier.fillMaxWidth()) {
-                    ListItem(
-                        leadingContent = { Icon(Icons.Filled.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                        headlineContent = { Text(stringResource(R.string.recent_error)) },
-                        supportingContent = { Text(it) },
-                    )
-                }
-            }
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                shape = MaterialTheme.shapes.extraLarge,
-            ) {
+            Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            SettingsGroup {
                 SettingsSwitch(
                     title = stringResource(R.string.auto_enter_tx5dr),
                     subtitle = stringResource(R.string.auto_enter_tx5dr_subtitle),
@@ -750,6 +847,28 @@ private fun DiagnosticsSheet(
                     },
                 )
             }
+            SettingsGroup {
+                SettingsAction(
+                    icon = Icons.Filled.Lan,
+                    title = stringResource(R.string.refresh_lan),
+                    subtitle = stringResource(R.string.refresh_lan_subtitle),
+                    onClick = onRefreshLan,
+                )
+                HorizontalDivider()
+                SettingsAction(
+                    icon = Icons.Filled.BatterySaver,
+                    title = stringResource(R.string.battery_optimization_settings),
+                    subtitle = stringResource(R.string.battery_optimization_subtitle),
+                    onClick = onOpenBatterySettings,
+                )
+                HorizontalDivider()
+                SettingsAction(
+                    icon = Icons.Filled.PowerSettingsNew,
+                    title = stringResource(R.string.install_update),
+                    subtitle = stringResource(R.string.install_update_subtitle),
+                    onClick = onInstallClick,
+                )
+            }
             OutlinedTextField(
                 value = manifestUrl,
                 onValueChange = onManifestUrlChange,
@@ -757,24 +876,19 @@ private fun DiagnosticsSheet(
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2,
             )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onRefreshLan) { Text(stringResource(R.string.refresh_lan)) }
-                OutlinedButton(onClick = onOpenBatterySettings) { Text(stringResource(R.string.battery_optimization_settings)) }
-                OutlinedButton(onClick = onInstallClick) { Text(stringResource(R.string.install_update)) }
-            }
-            Text(stringResource(R.string.runtime_logs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Surface(Modifier.fillMaxWidth().height(360.dp), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.large) {
-                Text(
-                    logs.ifBlank { stringResource(R.string.no_logs) },
-                    modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+        shape = MaterialTheme.shapes.extraLarge,
+        content = content,
+    )
 }
 
 @Composable
@@ -783,6 +897,21 @@ private fun SettingsSwitch(title: String, subtitle: String, checked: Boolean, on
         headlineContent = { Text(title) },
         supportingContent = { Text(subtitle) },
         trailingContent = { Switch(checked = checked, onCheckedChange = onCheckedChange) },
+    )
+}
+
+@Composable
+private fun SettingsAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        leadingContent = { Icon(icon, contentDescription = null) },
+        headlineContent = { Text(title) },
+        supportingContent = { Text(subtitle) },
     )
 }
 
