@@ -64,6 +64,9 @@ class MainActivity : ComponentActivity() {
     private val logListener: (String) -> Unit = { text -> runOnUiThread { logs = text } }
     private val usbAudioListener: (UsbAudioStatus) -> Unit = { status -> runOnUiThread { usbAudioStatus = status } }
     private val usbSerialListener: (UsbSerialStatus) -> Unit = { status -> runOnUiThread { usbSerialStatus = status } }
+    private val networkListener: (NetworkAccessProvider.Snapshot) -> Unit = { snapshot ->
+        runOnUiThread { lanUrls = snapshot.urls }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -122,6 +125,7 @@ class MainActivity : ComponentActivity() {
         setContentView(rootContainer)
         BridgeRuntime.addStatusListener(statusListener)
         LogBus.addListener(logListener)
+        NetworkAccessProvider.addListener(networkListener)
         AndroidUsbAudioBridge.addListener(usbAudioListener)
         AndroidUsbSerialBridge.addListener(usbSerialListener)
         AndroidUsbAudioBridge.refreshDevices(this)
@@ -147,6 +151,7 @@ class MainActivity : ComponentActivity() {
         destroyNativeWebView()
         BridgeRuntime.removeStatusListener(statusListener)
         LogBus.removeListener(logListener)
+        NetworkAccessProvider.removeListener(networkListener)
         AndroidUsbAudioBridge.removeListener(usbAudioListener)
         AndroidUsbSerialBridge.removeListener(usbSerialListener)
         super.onDestroy()

@@ -7,11 +7,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -149,47 +151,26 @@ fun DashboardScreen(
                 },
             ) { padding ->
                 AtmosphereBox(Modifier.fillMaxSize().padding(padding)) {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 20.dp, vertical = 26.dp),
-                        verticalArrangement = Arrangement.spacedBy(18.dp),
-                    ) {
-                        HeroStatusPanel(
-                            status = bridgeStatus,
-                            onInstallClick = onInstallClick,
-                            onStartRuntime = onStartRuntime,
-                            onStopRuntime = onStopRuntime,
-                            onOpenWebView = onOpenWebView,
-                            onShowDiagnostics = onShowDiagnostics,
-                            updateAvailable = hasRuntimeUpdate(bridgeStatus, releasePreview),
-                        )
-                        if (usbAudioStatus.needsRecordAudioPermission()) {
-                            AudioPermissionNotice(
-                                denied = usbAudioStatus.state == "permission-denied",
-                                onAuthorizeAudio = onAuthorizeAudio,
-                            )
-                        }
-                        ServiceAccessStrip(
-                            healthy = bridgeStatus.webHealthy,
-                            lanUrls = lanUrls,
-                            onCopyText = onCopyText,
-                            onRefreshLan = onRefreshLan,
-                        )
-                        HardwareDock(
-                            audioStatus = usbAudioStatus,
-                            serialStatus = usbSerialStatus,
-                            keepAliveEnabled = keepAliveEnabled,
-                            onAudioClick = { detailSheet = DetailSheet.Audio },
-                            onSerialClick = { detailSheet = DetailSheet.Serial },
-                            onAuthorizeAudio = onAuthorizeAudio,
-                            onKeepAliveChange = onSetKeepAlive,
-                            onRefreshBridges = onRefreshBridges,
-                            onOpenBatterySettings = onOpenBatterySettings,
-                        )
-                        Spacer(Modifier.height(16.dp))
-                    }
+                    DashboardContent(
+                        bridgeStatus = bridgeStatus,
+                        usbAudioStatus = usbAudioStatus,
+                        usbSerialStatus = usbSerialStatus,
+                        lanUrls = lanUrls,
+                        keepAliveEnabled = keepAliveEnabled,
+                        updateAvailable = hasRuntimeUpdate(bridgeStatus, releasePreview),
+                        onInstallClick = onInstallClick,
+                        onStartRuntime = onStartRuntime,
+                        onStopRuntime = onStopRuntime,
+                        onOpenWebView = onOpenWebView,
+                        onShowDiagnostics = onShowDiagnostics,
+                        onCopyText = onCopyText,
+                        onAudioClick = { detailSheet = DetailSheet.Audio },
+                        onSerialClick = { detailSheet = DetailSheet.Serial },
+                        onAuthorizeAudio = onAuthorizeAudio,
+                        onSetKeepAlive = onSetKeepAlive,
+                        onRefreshBridges = onRefreshBridges,
+                        onOpenBatterySettings = onOpenBatterySettings,
+                    )
                 }
             }
 
@@ -260,6 +241,132 @@ private fun AtmosphereBox(modifier: Modifier = Modifier, content: @Composable ()
         ),
     ) {
         content()
+    }
+}
+
+@Composable
+private fun DashboardContent(
+    bridgeStatus: BridgeStatus,
+    usbAudioStatus: UsbAudioStatus,
+    usbSerialStatus: UsbSerialStatus,
+    lanUrls: List<String>,
+    keepAliveEnabled: Boolean,
+    updateAvailable: Boolean,
+    onInstallClick: () -> Unit,
+    onStartRuntime: () -> Unit,
+    onStopRuntime: () -> Unit,
+    onOpenWebView: () -> Unit,
+    onShowDiagnostics: () -> Unit,
+    onCopyText: (String) -> Unit,
+    onAudioClick: () -> Unit,
+    onSerialClick: () -> Unit,
+    onAuthorizeAudio: () -> Unit,
+    onSetKeepAlive: (Boolean) -> Unit,
+    onRefreshBridges: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val wideLayout = maxWidth >= 720.dp
+        if (wideLayout) {
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 32.dp, vertical = 28.dp),
+                horizontalArrangement = Arrangement.spacedBy(28.dp),
+            ) {
+                Column(
+                    Modifier
+                        .weight(0.92f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState())
+                        .padding(top = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    HeroStatusPanel(
+                        status = bridgeStatus,
+                        onInstallClick = onInstallClick,
+                        onStartRuntime = onStartRuntime,
+                        onStopRuntime = onStopRuntime,
+                        onOpenWebView = onOpenWebView,
+                        onShowDiagnostics = onShowDiagnostics,
+                        updateAvailable = updateAvailable,
+                    )
+                }
+                Column(
+                    Modifier
+                        .weight(1.08f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    if (usbAudioStatus.needsRecordAudioPermission()) {
+                        AudioPermissionNotice(
+                            denied = usbAudioStatus.state == "permission-denied",
+                            onAuthorizeAudio = onAuthorizeAudio,
+                        )
+                    }
+                    ServiceAccessStrip(
+                        healthy = bridgeStatus.webHealthy,
+                        lanUrls = lanUrls,
+                        onCopyText = onCopyText,
+                    )
+                    HardwareDock(
+                        audioStatus = usbAudioStatus,
+                        serialStatus = usbSerialStatus,
+                        keepAliveEnabled = keepAliveEnabled,
+                        onAudioClick = onAudioClick,
+                        onSerialClick = onSerialClick,
+                        onAuthorizeAudio = onAuthorizeAudio,
+                        onKeepAliveChange = onSetKeepAlive,
+                        onRefreshBridges = onRefreshBridges,
+                        onOpenBatterySettings = onOpenBatterySettings,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 26.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                HeroStatusPanel(
+                    status = bridgeStatus,
+                    onInstallClick = onInstallClick,
+                    onStartRuntime = onStartRuntime,
+                    onStopRuntime = onStopRuntime,
+                    onOpenWebView = onOpenWebView,
+                    onShowDiagnostics = onShowDiagnostics,
+                    updateAvailable = updateAvailable,
+                )
+                if (usbAudioStatus.needsRecordAudioPermission()) {
+                    AudioPermissionNotice(
+                        denied = usbAudioStatus.state == "permission-denied",
+                        onAuthorizeAudio = onAuthorizeAudio,
+                    )
+                }
+                ServiceAccessStrip(
+                    healthy = bridgeStatus.webHealthy,
+                    lanUrls = lanUrls,
+                    onCopyText = onCopyText,
+                )
+                HardwareDock(
+                    audioStatus = usbAudioStatus,
+                    serialStatus = usbSerialStatus,
+                    keepAliveEnabled = keepAliveEnabled,
+                    onAudioClick = onAudioClick,
+                    onSerialClick = onSerialClick,
+                    onAuthorizeAudio = onAuthorizeAudio,
+                    onKeepAliveChange = onSetKeepAlive,
+                    onRefreshBridges = onRefreshBridges,
+                    onOpenBatterySettings = onOpenBatterySettings,
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+        }
     }
 }
 
@@ -390,7 +497,6 @@ private fun ServiceAccessStrip(
     healthy: Boolean,
     lanUrls: List<String>,
     onCopyText: (String) -> Unit,
-    onRefreshLan: () -> Unit,
 ) {
     if (!healthy && lanUrls.isEmpty()) return
     val cardShape = MaterialTheme.shapes.extraLarge
@@ -402,15 +508,18 @@ private fun ServiceAccessStrip(
     ) {
         ListItem(
             leadingContent = { Icon(Icons.Filled.Lan, contentDescription = null) },
-            headlineContent = { Text(if (healthy) "局域网可访问" else "等待服务启动") },
+            headlineContent = { Text(if (healthy) "热点/局域网入口" else "等待服务启动") },
             supportingContent = {
-                Text(lanUrls.firstOrNull() ?: "服务启动后会显示访问地址", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    lanUrls.firstOrNull() ?: "可连接手机热点或同一 Wi-Fi 后访问",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             },
             trailingContent = {
-                Row {
-                    IconButton(onClick = onRefreshLan) { Icon(Icons.Filled.Refresh, contentDescription = "刷新 LAN") }
-                    if (lanUrls.isNotEmpty()) {
-                        IconButton(onClick = { onCopyText(lanUrls.first()) }) { Icon(Icons.Filled.ContentCopy, contentDescription = "复制地址") }
+                if (lanUrls.isNotEmpty()) {
+                    IconButton(onClick = { onCopyText(lanUrls.first()) }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "复制地址")
                     }
                 }
             },

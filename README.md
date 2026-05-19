@@ -10,7 +10,7 @@ This project is intentionally a PoC and is not Play Store-ready. The first targe
 - Install TX-5DR portable Android runtime releases from a manifest URL.
 - Start the TX-5DR server on `127.0.0.1:4000` and the `client-tools` static/proxy service on `0.0.0.0:8076`.
 - Display the web UI in an Android WebView at `http://127.0.0.1:8076`.
-- Show LAN URLs discovered by Kotlin, such as `http://192.168.1.23:8076`, for same-Wi-Fi browser access.
+- Show hotspot/LAN URLs discovered by Kotlin, such as `http://192.168.43.1:8076` or `http://192.168.1.23:8076`, for browser access from devices connected to the phone hotspot or the same Wi-Fi.
 - Provide debug-only ADB commands for install/start/stop/log collection without touching the phone UI.
 - Bridge Android USB audio into Linux PulseAudio inside PRoot for RX/TX experiments.
 - Bridge Android USB serial into a Linux PTY path for Hamlib CAT experiments.
@@ -315,5 +315,5 @@ Inside PRoot, Hamlib should use `/opt/tx5dr-data/android-dev/ttyUSB0` as the ser
 - No background automatic updater or rollback UI yet.
 - USB serial bridge is experimental: CAT byte I/O and termios baud/parity sync are implemented; DTR/RTS/CW over PTY modem lines still needs hardware validation.
 - Rootfs and runtime assets are large; future work should consider asset delivery or differential updates.
-- LAN browser access requires the phone and client to be on the same reachable network; Wi-Fi AP isolation, cellular networks, VPNs, and aggressive vendor background limits can block inbound access.
+- LAN browser access requires the client to be on a reachable network: either connected to the phone hotspot or on the same Wi-Fi. Wi-Fi AP isolation, cellular carrier addresses, VPNs, and aggressive vendor background limits can block inbound access.
 - LAN URLs never include the admin token. The embedded WebView uses local `127.0.0.1` with token injection, while LAN browsers must use the normal auth flow.
