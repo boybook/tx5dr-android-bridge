@@ -38,8 +38,11 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -63,12 +66,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.tx5dr.bridge.BridgeStatus
 import com.tx5dr.bridge.R
@@ -102,8 +108,8 @@ fun DashboardScreen(
     onAuthorizeAudio: () -> Unit,
     onStartSerial: () -> Unit,
     onSetKeepAlive: (Boolean) -> Unit,
-    onOpenBatterySettings: () -> Unit,
     onRefreshBridges: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
     onShowDiagnostics: () -> Unit,
     onDismissDiagnostics: () -> Unit,
     onCopyText: (String) -> Unit,
@@ -129,9 +135,9 @@ fun DashboardScreen(
                         },
                         navigationIcon = {
                             Image(
-                                painter = painterResource(R.drawable.ic_launcher_foreground),
+                                painter = painterResource(R.drawable.tx5dr_logo_full),
                                 contentDescription = null,
-                                modifier = Modifier.padding(start = 12.dp).size(32.dp),
+                                modifier = Modifier.padding(start = 12.dp).size(36.dp),
                             )
                         },
                         actions = {
@@ -157,7 +163,14 @@ fun DashboardScreen(
                             onStopRuntime = onStopRuntime,
                             onOpenWebView = onOpenWebView,
                             onShowDiagnostics = onShowDiagnostics,
+                            updateAvailable = hasRuntimeUpdate(bridgeStatus, releasePreview),
                         )
+                        if (usbAudioStatus.needsRecordAudioPermission()) {
+                            AudioPermissionNotice(
+                                denied = usbAudioStatus.state == "permission-denied",
+                                onAuthorizeAudio = onAuthorizeAudio,
+                            )
+                        }
                         ServiceAccessStrip(
                             healthy = bridgeStatus.webHealthy,
                             lanUrls = lanUrls,
@@ -170,8 +183,10 @@ fun DashboardScreen(
                             keepAliveEnabled = keepAliveEnabled,
                             onAudioClick = { detailSheet = DetailSheet.Audio },
                             onSerialClick = { detailSheet = DetailSheet.Serial },
+                            onAuthorizeAudio = onAuthorizeAudio,
                             onKeepAliveChange = onSetKeepAlive,
                             onRefreshBridges = onRefreshBridges,
+                            onOpenBatterySettings = onOpenBatterySettings,
                         )
                         Spacer(Modifier.height(16.dp))
                     }
@@ -248,6 +263,14 @@ private fun AtmosphereBox(modifier: Modifier = Modifier, content: @Composable ()
     }
 }
 
+private fun Modifier.tx5drSoftShadow(elevation: Dp, shape: Shape): Modifier =
+    shadow(
+        elevation = elevation,
+        shape = shape,
+        ambientColor = Color.Black.copy(alpha = 0.06f),
+        spotColor = Color.Black.copy(alpha = 0.09f),
+    )
+
 @Composable
 private fun HeroStatusPanel(
     status: BridgeStatus,
@@ -256,10 +279,11 @@ private fun HeroStatusPanel(
     onStopRuntime: () -> Unit,
     onOpenWebView: () -> Unit,
     onShowDiagnostics: () -> Unit,
+    updateAvailable: Boolean,
 ) {
     val visual = statusVisual(status)
     val title = when {
-        status.serverHealthy && status.webHealthy -> "服务已就绪"
+        status.serverHealthy && status.webHealthy -> "服务运行中"
         status.runtimeState == RuntimeState.NotInstalled -> "需要安装引擎"
         status.runtimeState == RuntimeState.Installing -> "正在安装引擎"
         status.runtimeState == RuntimeState.Starting || status.runtimeState == RuntimeState.Running -> "正在准备服务"
@@ -306,7 +330,7 @@ private fun HeroStatusPanel(
                         Spacer(Modifier.width(8.dp))
                         Text("启动服务")
                     }
-                    TextButton(onClick = {}, enabled = false) { Text("更新") }
+                    UpdateTextButton(onClick = {}, enabled = false, updateAvailable = updateAvailable)
                 }
                 status.runtimeState == RuntimeState.NotInstalled -> {
                     Button(onClick = onInstallClick, modifier = Modifier.widthIn(min = 168.dp)) {
@@ -337,10 +361,27 @@ private fun HeroStatusPanel(
                         Spacer(Modifier.width(8.dp))
                         Text("启动服务")
                     }
-                    TextButton(onClick = onInstallClick) { Text("更新") }
+                    UpdateTextButton(onClick = onInstallClick, updateAvailable = updateAvailable)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun UpdateTextButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    updateAvailable: Boolean,
+) {
+    BadgedBox(
+        badge = {
+            if (updateAvailable) {
+                Badge(containerColor = MaterialTheme.colorScheme.error)
+            }
+        },
+    ) {
+        TextButton(onClick = onClick, enabled = enabled) { Text("更新") }
     }
 }
 
@@ -352,16 +393,18 @@ private fun ServiceAccessStrip(
     onRefreshLan: () -> Unit,
 ) {
     if (!healthy && lanUrls.isEmpty()) return
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-        shape = MaterialTheme.shapes.extraLarge,
+    val cardShape = MaterialTheme.shapes.extraLarge
+    Card(
+        modifier = Modifier.fillMaxWidth().tx5drSoftShadow(10.dp, cardShape),
+        shape = cardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         ListItem(
             leadingContent = { Icon(Icons.Filled.Lan, contentDescription = null) },
-            headlineContent = { Text(if (healthy) "局域网可访问" else "等待服务就绪") },
+            headlineContent = { Text(if (healthy) "局域网可访问" else "等待服务启动") },
             supportingContent = {
-                Text(lanUrls.firstOrNull() ?: "服务健康后会显示访问地址", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(lanUrls.firstOrNull() ?: "服务启动后会显示访问地址", maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
             trailingContent = {
                 Row {
@@ -382,21 +425,32 @@ private fun HardwareDock(
     keepAliveEnabled: Boolean,
     onAudioClick: () -> Unit,
     onSerialClick: () -> Unit,
+    onAuthorizeAudio: () -> Unit,
     onKeepAliveChange: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("电台连接", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             TextButton(onClick = onRefreshBridges) { Text("刷新") }
         }
-        Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f), shape = MaterialTheme.shapes.extraLarge) {
+        val cardShape = MaterialTheme.shapes.extraLarge
+        Card(
+            Modifier.fillMaxWidth().tx5drSoftShadow(12.dp, cardShape),
+            shape = cardShape,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
             Column {
                 HardwareListItem(
                     icon = Icons.Filled.GraphicEq,
                     title = "USB 音频",
                     state = audioStatus.state,
-                    supporting = audioStatus.inputDevices.firstOrNull()?.name ?: audioStatus.outputDevices.firstOrNull()?.name ?: "插入 USB 声卡后自动检测",
+                    supporting = when {
+                        audioStatus.needsRecordAudioPermission() -> "需要允许麦克风权限"
+                        else -> audioStatus.inputDevices.firstOrNull()?.name ?: audioStatus.outputDevices.firstOrNull()?.name ?: "插入 USB 声卡后自动检测"
+                    },
                     onClick = onAudioClick,
                 )
                 HorizontalDivider()
@@ -414,7 +468,59 @@ private fun HardwareDock(
                     supportingContent = { Text("息屏时保持后台服务运行") },
                     trailingContent = { Switch(checked = keepAliveEnabled, onCheckedChange = onKeepAliveChange) },
                 )
+                if (keepAliveEnabled) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 72.dp, end = 16.dp, bottom = 16.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        OutlinedButton(onClick = onOpenBatterySettings) { Text("前往电池优化设置") }
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun AudioPermissionNotice(
+    denied: Boolean,
+    onAuthorizeAudio: () -> Unit,
+) {
+    val cardShape = MaterialTheme.shapes.extraLarge
+    Card(
+        modifier = Modifier.fillMaxWidth().tx5drSoftShadow(8.dp, cardShape),
+        shape = cardShape,
+        colors = CardDefaults.cardColors(
+            containerColor = if (denied) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(
+                imageVector = if (denied) Icons.Filled.Error else Icons.Filled.Info,
+                contentDescription = null,
+                tint = if (denied) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = if (denied) "麦克风权限已拒绝" else "允许麦克风以启用 USB 音频",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (denied) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    text = "服务可继续运行，但没有此权限无法接收电台音频。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (denied) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Button(onClick = onAuthorizeAudio) { Text(if (denied) "去允许" else "允许") }
         }
     }
 }
@@ -621,5 +727,14 @@ private fun usbSerialState(status: UsbSerialStatus): String = when {
     status.state == "starting" && status.activePath != null -> "waiting-helper"
     else -> status.state
 }
+
+private fun hasRuntimeUpdate(status: BridgeStatus, preview: ReleasePreview?): Boolean {
+    val installed = status.installedVersion?.trim().orEmpty()
+    val latest = preview?.version?.trim().orEmpty()
+    return installed.isNotEmpty() && latest.isNotEmpty() && installed != latest
+}
+
+private fun UsbAudioStatus.needsRecordAudioPermission(): Boolean =
+    state == "permission-required" || state == "permission-denied"
 
 private enum class DetailSheet { Audio, Serial }

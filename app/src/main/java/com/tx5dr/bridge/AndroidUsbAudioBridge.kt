@@ -68,7 +68,12 @@ object AndroidUsbAudioBridge {
         val outputs = manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
             .filter { it.isUsbAudioDevice() && it.isSink }
             .map { it.toBridgeDevice("output") }
-        update(status.copy(inputDevices = inputs, outputDevices = outputs, error = null))
+        val nextState = when {
+            hasRecordPermission(context) -> status.state
+            status.state == "permission-denied" -> "permission-denied"
+            else -> "permission-required"
+        }
+        update(status.copy(state = nextState, inputDevices = inputs, outputDevices = outputs, error = null))
         return status
     }
 
@@ -94,12 +99,12 @@ object AndroidUsbAudioBridge {
 
     fun startIfPermitted(context: Context): Boolean {
         val refreshed = refreshDevices(context)
-        if (refreshed.inputDevices.isEmpty() && refreshed.outputDevices.isEmpty()) {
-            update(refreshed.copy(state = "no-device", error = null))
+        if (!hasRecordPermission(context)) {
+            update(refreshed.copy(state = if (refreshed.state == "permission-denied") "permission-denied" else "permission-required", error = null))
             return false
         }
-        if (!hasRecordPermission(context)) {
-            update(refreshed.copy(state = "permission-required", error = null))
+        if (refreshed.inputDevices.isEmpty() && refreshed.outputDevices.isEmpty()) {
+            update(refreshed.copy(state = "no-device", error = null))
             return false
         }
         start(context)
@@ -119,6 +124,10 @@ object AndroidUsbAudioBridge {
         inputThread = Thread { inputLoop(app) }.also { it.name = "tx5dr-usb-audio-input"; it.start() }
         outputThread = Thread { outputLoop(app) }.also { it.name = "tx5dr-usb-audio-output"; it.start() }
         BridgeRuntime.startLinuxAudioSide()
+    }
+
+    fun markPermissionDenied() {
+        update(status.copy(state = "permission-denied", error = "麦克风权限被拒绝，USB 音频桥接无法启动"))
     }
 
     fun stop() {

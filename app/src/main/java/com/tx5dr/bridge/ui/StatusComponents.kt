@@ -34,8 +34,8 @@ internal fun statusVisual(status: BridgeStatus): StatusVisual {
         )
         status.serverHealthy && status.webHealthy -> StatusVisual(
             title = "可以开始使用",
-            subtitle = "后台服务已就绪，可进入 TX-5DR。",
-            chip = "已就绪",
+            subtitle = "后台服务运行中，可进入 TX-5DR。",
+            chip = "运行中",
             icon = Icons.Filled.CheckCircle,
             color = scheme.primary,
         )

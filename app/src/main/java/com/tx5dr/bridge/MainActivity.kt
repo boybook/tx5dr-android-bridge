@@ -50,6 +50,8 @@ class MainActivity : ComponentActivity() {
     private var micWanted = false
     private lateinit var rootContainer: FrameLayout
     private var nativeWebView: WebView? = null
+    private var lastReleasePreviewUrl: String? = null
+    private var lastReleasePreviewAtMs: Long = 0L
 
     private val statusListener: (BridgeStatus) -> Unit = { status ->
         runOnUiThread {
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
         refreshLanUrls()
         bridgeStatus = BridgeRuntime.snapshotStatus()
         logs = LogBus.snapshot()
+        checkRemoteVersion(force = true)
         rootContainer = FrameLayout(this)
         val composeView = ComposeView(this).apply {
             setContent {
@@ -102,7 +105,11 @@ class MainActivity : ComponentActivity() {
                     onDismissDiagnostics = { showDiagnosticsSheet = false },
                     onCopyText = { copyToClipboard(it) },
                     onRefreshLan = { refreshLanUrls() },
-                    onManifestUrlChange = { manifestUrl = it },
+                    onManifestUrlChange = {
+                        manifestUrl = it
+                        releasePreview = null
+                        releasePreviewError = null
+                    },
                     onAutoOpenWebViewChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, it) },
                     onServiceOnlyModeChange = { value ->
                         setBooleanPreference(BridgeRuntime.PREF_SERVICE_ONLY_MODE, value)
@@ -128,6 +135,12 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         loadPreferences()
         refreshLanUrls()
+        AndroidUsbAudioBridge.refreshDevices(this)
+        AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
+        if (AndroidUsbAudioBridge.hasRecordPermission(this) && BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
+            AndroidUsbAudioBridge.startIfPermitted(this)
+        }
+        checkRemoteVersion()
     }
 
     override fun onDestroy() {
@@ -460,6 +473,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkRemoteVersion(force: Boolean = false) {
+        val url = manifestUrl.trim()
+        if (url.isBlank()) return
+        val now = System.currentTimeMillis()
+        if (!force && lastReleasePreviewUrl == url && now - lastReleasePreviewAtMs < RELEASE_PREVIEW_MIN_INTERVAL_MS) return
+        lastReleasePreviewUrl = url
+        lastReleasePreviewAtMs = now
+        BridgeRuntime.setManifestUrl(url)
+        BridgeRuntime.fetchReleasePreview(url) { preview, error ->
+            releasePreview = preview
+            releasePreviewError = error
+        }
+    }
+
     private fun startRuntime() {
         BridgeRuntime.setManifestUrl(manifestUrl)
         BridgeService.start(this, BridgeService.ACTION_START_RUNTIME)
@@ -471,6 +498,14 @@ class MainActivity : ComponentActivity() {
 
     private fun authorizeAudio() {
         if (!AndroidUsbAudioBridge.hasRecordPermission(this)) {
+            if (Build.VERSION.SDK_INT >= 23 &&
+                usbAudioStatus.state == "permission-denied" &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+            ) {
+                LogBus.w("AudioBridge", "Microphone permission denied permanently; opening app settings")
+                openAppSettings()
+                return
+            }
             micWanted = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_RECORD_AUDIO)
         } else {
@@ -497,8 +532,12 @@ class MainActivity : ComponentActivity() {
         runCatching {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }.onFailure {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            openAppSettings()
         }
+    }
+
+    private fun openAppSettings() {
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -511,7 +550,12 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_RECORD_AUDIO && micWanted) {
             micWanted = false
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) AndroidUsbAudioBridge.start(this) else LogBus.w("AudioBridge", "Microphone permission denied")
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                AndroidUsbAudioBridge.start(this)
+            } else {
+                LogBus.w("AudioBridge", "Microphone permission denied")
+                AndroidUsbAudioBridge.markPermissionDenied()
+            }
         }
     }
 
@@ -527,5 +571,6 @@ class MainActivity : ComponentActivity() {
         private const val WEB_PORT = 8076
         private const val WEB_URL = "http://127.0.0.1:8076"
         private const val WEB_CHROME_BRIDGE = "Tx5drAndroidChrome"
+        private const val RELEASE_PREVIEW_MIN_INTERVAL_MS = 10 * 60 * 1000L
     }
 }

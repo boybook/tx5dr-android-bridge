@@ -37,6 +37,6 @@
         <service
             android:name=".BridgeService"
             android:exported="false"
-            android:foregroundServiceType="dataSync|microphone" />
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
