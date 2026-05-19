@@ -51,7 +51,10 @@
     <string name="access_title_ready">Hotspot / LAN access</string>
     <string name="access_title_waiting">Waiting for service</string>
     <string name="access_fallback">Connect to the phone hotspot or same Wi-Fi to access.</string>
+    <string name="admin_token_title">Admin token</string>
+    <string name="admin_token_waiting">Waiting for the service to generate an admin token.</string>
     <string name="cd_copy_address">Copy address</string>
+    <string name="copy_success">Copied</string>
     <string name="cd_diagnostics_settings">Diagnostics and settings</string>
     <string name="cd_more_actions">More actions</string>
 
@@ -92,7 +95,11 @@
     <string name="install_dialog_title">Install TX-5DR engine</string>
     <string name="install_update_dialog_title">Install / update TX-5DR engine</string>
     <string name="install_dialog_body">This downloads the Android arm64 runtime, verifies sha256, then switches versions. Failure will not overwrite the current working version.</string>
-    <string name="release_version">Version: %1$s</string>
+    <string name="install_dialog_update_body">A newer runtime is available. This will update the installed engine after download and verification.</string>
+    <string name="install_dialog_reinstall_body">The installed runtime already matches the remote version. This will re-download and reinstall it.</string>
+    <string name="release_current_version">Current: %1$s</string>
+    <string name="release_remote_version">Remote: %1$s</string>
+    <string name="release_not_installed">Not installed</string>
     <string name="release_size">Size: %1$s</string>
     <string name="release_preview_error">Unable to read version info: %1$s</string>
     <string name="release_preview_loading">Reading version and size...</string>

@@ -51,7 +51,10 @@
     <string name="access_title_ready">热点/局域网入口</string>
     <string name="access_title_waiting">等待服务启动</string>
     <string name="access_fallback">可连接手机热点或同一 Wi-Fi 后访问</string>
+    <string name="admin_token_title">管理员token</string>
+    <string name="admin_token_waiting">等待服务生成管理员 Token</string>
     <string name="cd_copy_address">复制地址</string>
+    <string name="copy_success">已复制</string>
     <string name="cd_diagnostics_settings">诊断与设置</string>
     <string name="cd_more_actions">更多操作</string>
 
@@ -92,7 +95,11 @@
     <string name="install_dialog_title">安装 TX-5DR 引擎</string>
     <string name="install_update_dialog_title">安装/更新 TX-5DR 引擎</string>
     <string name="install_dialog_body">将下载 Android arm64 runtime，校验 sha256 后切换版本；失败不会覆盖当前可用版本。</string>
-    <string name="release_version">版本：%1$s</string>
+    <string name="install_dialog_update_body">检测到远端有新版本，下载并校验后将更新当前引擎。</string>
+    <string name="install_dialog_reinstall_body">当前版本与远端版本相同，将重新下载并安装运行环境。</string>
+    <string name="release_current_version">当前版本：%1$s</string>
+    <string name="release_remote_version">远端版本：%1$s</string>
+    <string name="release_not_installed">未安装</string>
     <string name="release_size">大小：%1$s</string>
     <string name="release_preview_error">无法读取版本信息：%1$s</string>
     <string name="release_preview_loading">正在读取版本和体积...</string>

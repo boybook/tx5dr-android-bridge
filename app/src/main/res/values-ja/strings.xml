@@ -51,7 +51,10 @@
     <string name="access_title_ready">ホットスポット / LAN アクセス</string>
     <string name="access_title_waiting">サービス起動待ち</string>
     <string name="access_fallback">スマートフォンのホットスポットまたは同じ Wi-Fi からアクセスできます。</string>
+    <string name="admin_token_title">管理者トークン</string>
+    <string name="admin_token_waiting">サービスが管理者トークンを生成するのを待っています。</string>
     <string name="cd_copy_address">アドレスをコピー</string>
+    <string name="copy_success">コピーしました</string>
     <string name="cd_diagnostics_settings">診断と設定</string>
     <string name="cd_more_actions">その他の操作</string>
 
@@ -92,7 +95,11 @@
     <string name="install_dialog_title">TX-5DR エンジンをインストール</string>
     <string name="install_update_dialog_title">TX-5DR エンジンをインストール / 更新</string>
     <string name="install_dialog_body">Android arm64 runtime をダウンロードし、sha256 を検証してからバージョンを切り替えます。失敗しても現在使用可能なバージョンは上書きされません。</string>
-    <string name="release_version">バージョン: %1$s</string>
+    <string name="install_dialog_update_body">リモートに新しいランタイムがあります。ダウンロードと検証後、インストール済みのエンジンを更新します。</string>
+    <string name="install_dialog_reinstall_body">インストール済みのランタイムはリモートと同じバージョンです。再ダウンロードして再インストールします。</string>
+    <string name="release_current_version">現在: %1$s</string>
+    <string name="release_remote_version">リモート: %1$s</string>
+    <string name="release_not_installed">未インストール</string>
     <string name="release_size">サイズ: %1$s</string>
     <string name="release_preview_error">バージョン情報を読み取れません: %1$s</string>
     <string name="release_preview_loading">バージョンとサイズを読み取り中...</string>

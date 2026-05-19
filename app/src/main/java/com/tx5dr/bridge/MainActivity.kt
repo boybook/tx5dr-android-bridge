@@ -31,6 +31,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity() {
     private var usbSerialStatus by mutableStateOf(UsbSerialStatus())
     private var logs by mutableStateOf("")
     private var lanUrls by mutableStateOf<List<String>>(emptyList())
+    private var adminToken by mutableStateOf<String?>(null)
     private var manifestUrl by mutableStateOf("")
     private var autoOpenWebView by mutableStateOf(true)
     private var serviceOnlyMode by mutableStateOf(false)
@@ -105,6 +107,7 @@ class MainActivity : ComponentActivity() {
     private val statusListener: (BridgeStatus) -> Unit = { status ->
         runOnUiThread {
             bridgeStatus = status
+            refreshAdminToken()
             if (status.serverHealthy && status.webHealthy && autoOpenWebView && !serviceOnlyMode && !webVisible && !webSuppressedForSession) {
                 openWebView()
             }
@@ -114,7 +117,10 @@ class MainActivity : ComponentActivity() {
     private val usbAudioListener: (UsbAudioStatus) -> Unit = { status -> runOnUiThread { usbAudioStatus = status } }
     private val usbSerialListener: (UsbSerialStatus) -> Unit = { status -> runOnUiThread { usbSerialStatus = status } }
     private val networkListener: (NetworkAccessProvider.Snapshot) -> Unit = { snapshot ->
-        runOnUiThread { lanUrls = snapshot.urls }
+        runOnUiThread {
+            lanUrls = snapshot.urls
+            refreshAdminToken()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -122,6 +128,7 @@ class MainActivity : ComponentActivity() {
         loadPreferences()
         manifestUrl = BridgeRuntime.getManifestUrl()
         refreshLanUrls()
+        refreshAdminToken()
         bridgeStatus = BridgeRuntime.snapshotStatus()
         logs = LogBus.snapshot()
         checkRemoteVersion(force = true)
@@ -134,6 +141,7 @@ class MainActivity : ComponentActivity() {
                     usbSerialStatus = usbSerialStatus,
                     logs = logs,
                     lanUrls = lanUrls,
+                    adminToken = adminToken,
                     manifestUrl = manifestUrl,
                     autoOpenWebView = autoOpenWebView,
                     keepAliveEnabled = keepAliveEnabled,
@@ -196,6 +204,7 @@ class MainActivity : ComponentActivity() {
         loadPreferences()
         updateNotificationPermissionState()
         refreshLanUrls()
+        refreshAdminToken()
         AndroidUsbAudioBridge.refreshDevices(this)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         if (AndroidUsbAudioBridge.hasRecordPermission(this) && BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
@@ -248,10 +257,16 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshLanUrls() {
         lanUrls = BridgeRuntime.refreshNetworkAccess().urls
+        refreshAdminToken()
+    }
+
+    private fun refreshAdminToken() {
+        adminToken = BridgeRuntime.getAdminToken()
     }
 
     private fun openWebView() {
-        val token = BridgeRuntime.getAdminToken()
+        refreshAdminToken()
+        val token = adminToken
         if (token == null) {
             LogBus.w("Tx5drBridge", "Admin token not found; wait until TX-5DR server is ready before opening WebView")
             return
@@ -967,6 +982,7 @@ class MainActivity : ComponentActivity() {
     private fun copyToClipboard(value: String) {
         val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         manager.setPrimaryClip(ClipData.newPlainText("TX-5DR", value))
+        Toast.makeText(this, getString(R.string.copy_success), Toast.LENGTH_SHORT).show()
         LogBus.i("Tx5drBridge", "Copied to clipboard: $value")
     }
 

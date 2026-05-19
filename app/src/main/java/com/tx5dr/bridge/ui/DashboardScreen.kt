@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
@@ -105,6 +106,7 @@ fun DashboardScreen(
     usbSerialStatus: UsbSerialStatus,
     logs: String,
     lanUrls: List<String>,
+    adminToken: String?,
     manifestUrl: String,
     autoOpenWebView: Boolean,
     keepAliveEnabled: Boolean,
@@ -197,6 +199,7 @@ fun DashboardScreen(
                         usbAudioStatus = usbAudioStatus,
                         usbSerialStatus = usbSerialStatus,
                         lanUrls = lanUrls,
+                        adminToken = adminToken,
                         keepAliveEnabled = keepAliveEnabled,
                         updateAvailable = hasRuntimeUpdate(bridgeStatus, releasePreview),
                         onInstallClick = onInstallClick,
@@ -219,7 +222,7 @@ fun DashboardScreen(
 
             if (showInstallDialog) {
                 InstallRuntimeDialog(
-                    runtimeState = bridgeStatus.runtimeState,
+                    bridgeStatus = bridgeStatus,
                     manifestUrl = manifestUrl,
                     releasePreview = releasePreview,
                     releasePreviewError = releasePreviewError,
@@ -303,6 +306,7 @@ private fun DashboardContent(
     usbAudioStatus: UsbAudioStatus,
     usbSerialStatus: UsbSerialStatus,
     lanUrls: List<String>,
+    adminToken: String?,
     keepAliveEnabled: Boolean,
     updateAvailable: Boolean,
     onInstallClick: () -> Unit,
@@ -366,6 +370,11 @@ private fun DashboardContent(
                         lanUrls = lanUrls,
                         onCopyText = onCopyText,
                     )
+                    AdminTokenCard(
+                        healthy = bridgeStatus.webHealthy,
+                        adminToken = adminToken,
+                        onCopyText = onCopyText,
+                    )
                     HardwareDock(
                         audioStatus = usbAudioStatus,
                         serialStatus = usbSerialStatus,
@@ -406,6 +415,11 @@ private fun DashboardContent(
                 ServiceAccessStrip(
                     healthy = bridgeStatus.webHealthy,
                     lanUrls = lanUrls,
+                    onCopyText = onCopyText,
+                )
+                AdminTokenCard(
+                    healthy = bridgeStatus.webHealthy,
+                    adminToken = adminToken,
                     onCopyText = onCopyText,
                 )
                 HardwareDock(
@@ -583,6 +597,50 @@ private fun ServiceAccessStrip(
 }
 
 @Composable
+private fun AdminTokenCard(
+    healthy: Boolean,
+    adminToken: String?,
+    onCopyText: (String) -> Unit,
+) {
+    val token = adminToken?.takeIf { it.isNotBlank() }
+    if (!healthy && token == null) return
+    val ready = token != null
+    val cardShape = MaterialTheme.shapes.extraLarge
+    Card(
+        modifier = Modifier.fillMaxWidth().tx5drSoftShadow(10.dp, cardShape),
+        shape = cardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        ListItem(
+            leadingContent = { Icon(Icons.Filled.VpnKey, contentDescription = null) },
+            headlineContent = { Text(stringResource(R.string.admin_token_title)) },
+            supportingContent = {
+                Text(
+                    token?.let { maskAdminToken(it) } ?: stringResource(R.string.admin_token_waiting),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            trailingContent = {
+                IconButton(
+                    onClick = { token?.let(onCopyText) },
+                    enabled = ready,
+                ) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                }
+            },
+        )
+    }
+}
+
+private fun maskAdminToken(token: String): String {
+    if (token.length <= 8) return "***"
+    val edge = minOf(6, token.length / 3)
+    return "${token.take(edge)}***${token.takeLast(edge)}"
+}
+
+@Composable
 private fun HardwareDock(
     audioStatus: UsbAudioStatus,
     serialStatus: UsbSerialStatus,
@@ -702,18 +760,18 @@ private fun HardwareListItem(
         leadingContent = { Icon(icon, contentDescription = null) },
         headlineContent = { Text(title) },
         supportingContent = { Text(supporting, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        trailingContent = { StateChip(state) },
+        trailingContent = { StateChip(state, onClick = onClick) },
     )
 }
 
 @Composable
-private fun StateChip(state: String) {
-    AssistChip(onClick = {}, label = { Text(bridgeLabel(state)) })
+private fun StateChip(state: String, onClick: () -> Unit = {}) {
+    AssistChip(onClick = onClick, label = { Text(bridgeLabel(state)) })
 }
 
 @Composable
 private fun InstallRuntimeDialog(
-    runtimeState: RuntimeState,
+    bridgeStatus: BridgeStatus,
     manifestUrl: String,
     releasePreview: ReleasePreview?,
     releasePreviewError: String?,
@@ -723,17 +781,34 @@ private fun InstallRuntimeDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.PowerSettingsNew, contentDescription = null) },
-        title = { Text(if (runtimeState == RuntimeState.NotInstalled) stringResource(R.string.install_dialog_title) else stringResource(R.string.install_update_dialog_title)) },
+        title = { Text(if (bridgeStatus.runtimeState == RuntimeState.NotInstalled) stringResource(R.string.install_dialog_title) else stringResource(R.string.install_update_dialog_title)) },
         text = {
+            val installedVersion = bridgeStatus.installedVersion?.trim().orEmpty()
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.install_dialog_body))
                 when {
                     releasePreview != null -> {
-                        Text(stringResource(R.string.release_version, releasePreview.version))
+                        val remoteVersion = releasePreview.version.trim()
+                        Text(
+                            when {
+                                installedVersion.isBlank() -> stringResource(R.string.install_dialog_body)
+                                installedVersion == remoteVersion -> stringResource(R.string.install_dialog_reinstall_body)
+                                else -> stringResource(R.string.install_dialog_update_body)
+                            },
+                        )
+                        Text(stringResource(R.string.release_current_version, installedVersion.ifBlank { stringResource(R.string.release_not_installed) }))
+                        Text(stringResource(R.string.release_remote_version, remoteVersion))
                         Text(stringResource(R.string.release_size, formatBytes(releasePreview.sizeBytes)))
                     }
-                    releasePreviewError != null -> Text(stringResource(R.string.release_preview_error, releasePreviewError), color = MaterialTheme.colorScheme.error)
-                    else -> Text(stringResource(R.string.release_preview_loading), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    releasePreviewError != null -> {
+                        Text(stringResource(R.string.install_dialog_body))
+                        Text(stringResource(R.string.release_current_version, installedVersion.ifBlank { stringResource(R.string.release_not_installed) }))
+                        Text(stringResource(R.string.release_preview_error, releasePreviewError), color = MaterialTheme.colorScheme.error)
+                    }
+                    else -> {
+                        Text(stringResource(R.string.install_dialog_body))
+                        Text(stringResource(R.string.release_current_version, installedVersion.ifBlank { stringResource(R.string.release_not_installed) }))
+                        Text(stringResource(R.string.release_preview_loading), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 Text(manifestUrl, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
