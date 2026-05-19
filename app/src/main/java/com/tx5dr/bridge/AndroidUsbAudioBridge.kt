@@ -24,6 +24,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
+object AudioRoute {
+    const val AUTO = "auto"
+    const val USB = "usb"
+    const val BUILTIN_MIC = "builtinMic"
+    const val BUILTIN_SPEAKER = "builtinSpeaker"
+}
+
 object AndroidUsbAudioBridge {
     private const val TAG = "AudioBridge"
     private const val INPUT_PORT = 4719
@@ -63,18 +70,41 @@ object AndroidUsbAudioBridge {
     fun refreshDevices(context: Context): UsbAudioStatus {
         val manager = context.applicationContext.getSystemService(AudioManager::class.java)
         val inputs = manager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
-            .filter { it.isUsbAudioDevice() && it.isSource }
+            .filter { it.isSupportedInputDevice() && it.isSource }
             .map { it.toBridgeDevice("input") }
         val outputs = manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
-            .filter { it.isUsbAudioDevice() && it.isSink }
+            .filter { it.isSupportedOutputDevice() && it.isSink }
             .map { it.toBridgeDevice("output") }
+        val selectedInputRoute = getSelectedInputRoute()
+        val selectedOutputRoute = getSelectedOutputRoute()
         val nextState = when {
             hasRecordPermission(context) -> status.state
             status.state == "permission-denied" -> "permission-denied"
             else -> "permission-required"
         }
-        update(status.copy(state = nextState, inputDevices = inputs, outputDevices = outputs, error = null))
+        update(
+            status.copy(
+                state = nextState,
+                selectedInputRoute = selectedInputRoute,
+                selectedOutputRoute = selectedOutputRoute,
+                inputDevices = inputs,
+                outputDevices = outputs,
+                error = null,
+            )
+        )
         return status
+    }
+
+    fun setInputRoute(context: Context, route: String) {
+        BridgeRuntime.setStringPreference(BridgeRuntime.PREF_AUDIO_INPUT_ROUTE, normalizeInputRoute(route))
+        refreshDevices(context)
+        restartIfRunning(context.applicationContext, "input route changed")
+    }
+
+    fun setOutputRoute(context: Context, route: String) {
+        BridgeRuntime.setStringPreference(BridgeRuntime.PREF_AUDIO_OUTPUT_ROUTE, normalizeOutputRoute(route))
+        refreshDevices(context)
+        restartIfRunning(context.applicationContext, "output route changed")
     }
 
     fun startWatchingDevices(context: Context) {
@@ -103,26 +133,59 @@ object AndroidUsbAudioBridge {
             update(refreshed.copy(state = if (refreshed.state == "permission-denied") "permission-denied" else "permission-required", error = null))
             return false
         }
-        if (refreshed.inputDevices.isEmpty() && refreshed.outputDevices.isEmpty()) {
-            update(refreshed.copy(state = "no-device", error = null))
+        val inputSelection = selectInputDevice(context)
+        val outputSelection = selectOutputDevice(context)
+        if (inputSelection.device == null || outputSelection.device == null) {
+            update(
+                refreshed.copy(
+                    state = "no-device",
+                    activeInputDevice = null,
+                    activeOutputDevice = null,
+                    error = unavailableRouteMessage(inputSelection, outputSelection),
+                )
+            )
             return false
         }
-        start(context)
+        start(context, inputSelection, outputSelection)
         return true
     }
 
     fun start(context: Context) {
+        start(context, null, null)
+    }
+
+    private fun start(context: Context, preparedInput: AudioDeviceSelection?, preparedOutput: AudioDeviceSelection?) {
         val app = context.applicationContext
         if (!hasRecordPermission(app)) {
             update(status.copy(state = "permission-required", error = "RECORD_AUDIO permission is required"))
             return
         }
         if (running) return
-        refreshDevices(app)
+        val refreshed = refreshDevices(app)
+        val inputSelection = preparedInput ?: selectInputDevice(app)
+        val outputSelection = preparedOutput ?: selectOutputDevice(app)
+        if (inputSelection.device == null || outputSelection.device == null) {
+            update(
+                refreshed.copy(
+                    state = "no-device",
+                    activeInputDevice = null,
+                    activeOutputDevice = null,
+                    error = unavailableRouteMessage(inputSelection, outputSelection),
+                )
+            )
+            return
+        }
         running = true
-        update(status.copy(state = "starting", error = null))
-        inputThread = Thread { inputLoop(app) }.also { it.name = "tx5dr-usb-audio-input"; it.start() }
-        outputThread = Thread { outputLoop(app) }.also { it.name = "tx5dr-usb-audio-output"; it.start() }
+        update(
+            status.copy(
+                state = "starting",
+                activeInputDevice = inputSelection.device.toBridgeDevice("input"),
+                activeOutputDevice = outputSelection.device.toBridgeDevice("output"),
+                error = null,
+            )
+        )
+        inputThread = Thread { inputLoop(app, inputSelection) }.also { it.name = "tx5dr-audio-input"; it.start() }
+        outputThread = Thread { outputLoop(app, outputSelection) }.also { it.name = "tx5dr-audio-output"; it.start() }
         BridgeRuntime.startLinuxAudioSide()
     }
 
@@ -131,61 +194,77 @@ object AndroidUsbAudioBridge {
     }
 
     fun stop() {
+        stop(stopLinuxSide = true)
+    }
+
+    private fun stop(stopLinuxSide: Boolean) {
         running = false
         try { inputServer?.close() } catch (_: Throwable) {}
         try { outputServer?.close() } catch (_: Throwable) {}
-        BridgeRuntime.stopLinuxAudioSide()
+        if (stopLinuxSide) BridgeRuntime.stopLinuxAudioSide()
         inputThread?.join(1500)
         outputThread?.join(1500)
         inputThread = null
         outputThread = null
-        update(status.copy(state = "stopped"))
+        update(status.copy(state = "stopped", activeInputDevice = null, activeOutputDevice = null))
     }
 
     private fun handleDeviceChange(context: Context, reason: String, devices: Array<out AudioDeviceInfo>) {
-        val usbChanged = devices.any { it.isUsbAudioDevice() }
-        if (!usbChanged) return
-        LogBus.i(TAG, "USB audio device $reason")
+        val audioChanged = devices.any { it.isSupportedInputDevice() || it.isSupportedOutputDevice() }
+        if (!audioChanged) return
+        val shouldRestart = shouldRestartForDeviceChange(devices)
+        LogBus.i(TAG, "Audio device $reason")
         refreshDevices(context)
-        if (running) {
+        if (shouldRestart) {
             Thread {
                 runCatching {
-                    stop()
+                    stop(stopLinuxSide = false)
                     startIfPermitted(context)
                 }.onFailure { error ->
-                    LogBus.e(TAG, "USB audio hotplug restart failed", error)
+                    LogBus.e(TAG, "Audio hotplug restart failed", error)
                     update(status.copy(state = "error", error = error.message))
                 }
-            }.also { it.name = "tx5dr-usb-audio-hotplug"; it.start() }
+            }.also { it.name = "tx5dr-audio-hotplug"; it.start() }
         } else if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
             runCatching { startIfPermitted(context) }.onFailure { error ->
-                LogBus.e(TAG, "USB audio hotplug autostart failed", error)
+                LogBus.e(TAG, "Audio hotplug autostart failed", error)
                 update(status.copy(state = "error", error = error.message))
             }
         }
     }
 
+    private fun restartIfRunning(context: Context, reason: String) {
+        if (!running) return
+        Thread {
+            LogBus.i(TAG, "Restarting audio bridge: $reason")
+            runCatching {
+                stop(stopLinuxSide = false)
+                startIfPermitted(context)
+            }.onFailure { error ->
+                LogBus.e(TAG, "Audio route restart failed", error)
+                update(status.copy(state = "error", error = error.message))
+            }
+        }.also { it.name = "tx5dr-audio-route-restart"; it.start() }
+    }
+
     @SuppressLint("MissingPermission")
-    private fun inputLoop(context: Context) {
+    private fun inputLoop(context: Context, selection: AudioDeviceSelection) {
         var recorder: AudioRecord? = null
         try {
-            val device = selectInputDevice(context)
+            val device = selection.device ?: error("Selected input audio route is unavailable")
             val formatAndBuffer = chooseRecordFormat(device)
             val format = AudioFormat.Builder()
                 .setSampleRate(formatAndBuffer.sampleRate)
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                 .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
                 .build()
-            recorder = AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.DEFAULT)
-                .setAudioFormat(format)
-                .setBufferSizeInBytes(formatAndBuffer.bufferSize)
-                .build()
-            if (device != null && Build.VERSION.SDK_INT >= 23) recorder.preferredDevice = device
+            val recordBuild = buildRecorder(format, formatAndBuffer.bufferSize, device)
+            recorder = recordBuild.recorder
+            if (Build.VERSION.SDK_INT >= 23) recorder.preferredDevice = device
             require(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord failed to initialize" }
             ServerSocket(INPUT_PORT, 1, InetAddress.getByName("127.0.0.1")).use { server ->
                 inputServer = server
-                LogBus.i(TAG, "USB audio input waiting on 127.0.0.1:$INPUT_PORT device=${device?.productName ?: "default"} rate=${formatAndBuffer.sampleRate} buffer=${formatAndBuffer.bufferSize}")
+                LogBus.i(TAG, "Audio input waiting on 127.0.0.1:$INPUT_PORT selectedRoute=${selection.route} activeDevice=${device.describe()} source=${sourceName(recordBuild.audioSource)} rate=${formatAndBuffer.sampleRate} buffer=${formatAndBuffer.bufferSize}")
                 server.accept().use { socket ->
                     socket.tcpNoDelay = true
                     socket.sendBufferSize = formatAndBuffer.bufferSize * 4
@@ -250,10 +329,10 @@ object AndroidUsbAudioBridge {
         }
     }
 
-    private fun outputLoop(context: Context) {
+    private fun outputLoop(context: Context, selection: AudioDeviceSelection) {
         var track: AudioTrack? = null
         try {
-            val device = selectOutputDevice(context)
+            val device = selection.device ?: error("Selected output audio route is unavailable")
             val rate = choosePlaybackRate(device)
             val minBuffer = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val bufferSize = maxOf(minBuffer, rate * BUFFER_TARGET_MS / 1000 * 2)
@@ -275,11 +354,11 @@ object AndroidUsbAudioBridge {
                 trackBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
             track = trackBuilder.build()
-            if (device != null && Build.VERSION.SDK_INT >= 23) track.preferredDevice = device
+            if (Build.VERSION.SDK_INT >= 23) track.preferredDevice = device
             require(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack failed to initialize" }
             ServerSocket(OUTPUT_PORT, 1, InetAddress.getByName("127.0.0.1")).use { server ->
                 outputServer = server
-                LogBus.i(TAG, "USB audio output waiting on 127.0.0.1:$OUTPUT_PORT device=${device?.productName ?: "default"} rate=$rate buffer=$bufferSize")
+                LogBus.i(TAG, "Audio output waiting on 127.0.0.1:$OUTPUT_PORT selectedRoute=${selection.route} activeDevice=${device.describe()} rate=$rate buffer=$bufferSize")
                 server.accept().use { socket ->
                     socket.tcpNoDelay = true
                     socket.receiveBufferSize = bufferSize * 4
@@ -391,15 +470,35 @@ object AndroidUsbAudioBridge {
         try { track.flush() } catch (_: Throwable) {}
     }
 
-    private fun selectInputDevice(context: Context): AudioDeviceInfo? = context.applicationContext
-        .getSystemService(AudioManager::class.java)
-        ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
-        ?.firstOrNull { it.isUsbAudioDevice() && it.isSource }
+    private fun selectInputDevice(context: Context): AudioDeviceSelection {
+        val route = getSelectedInputRoute()
+        val devices = context.applicationContext
+            .getSystemService(AudioManager::class.java)
+            ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .orEmpty()
+            .filter { it.isSupportedInputDevice() && it.isSource }
+        val device = when (route) {
+            AudioRoute.USB -> devices.firstOrNull { it.isUsbAudioDevice() }
+            AudioRoute.BUILTIN_MIC -> devices.firstOrNull { it.isBuiltinMicDevice() }
+            else -> devices.firstOrNull { it.isUsbAudioDevice() } ?: devices.firstOrNull { it.isBuiltinMicDevice() }
+        }
+        return AudioDeviceSelection(route, device)
+    }
 
-    private fun selectOutputDevice(context: Context): AudioDeviceInfo? = context.applicationContext
-        .getSystemService(AudioManager::class.java)
-        ?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        ?.firstOrNull { it.isUsbAudioDevice() && it.isSink }
+    private fun selectOutputDevice(context: Context): AudioDeviceSelection {
+        val route = getSelectedOutputRoute()
+        val devices = context.applicationContext
+            .getSystemService(AudioManager::class.java)
+            ?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .orEmpty()
+            .filter { it.isSupportedOutputDevice() && it.isSink }
+        val device = when (route) {
+            AudioRoute.USB -> devices.firstOrNull { it.isUsbAudioDevice() }
+            AudioRoute.BUILTIN_SPEAKER -> devices.firstOrNull { it.isBuiltinSpeakerDevice() }
+            else -> devices.firstOrNull { it.isUsbAudioDevice() } ?: devices.firstOrNull { it.isBuiltinSpeakerDevice() }
+        }
+        return AudioDeviceSelection(route, device)
+    }
 
     private fun chooseRecordFormat(device: AudioDeviceInfo?): AudioFormatChoice {
         val rates = device?.sampleRates?.takeIf { it.isNotEmpty() } ?: sampleRates
@@ -407,7 +506,7 @@ object AndroidUsbAudioBridge {
             val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             if (min > 0) return AudioFormatChoice(rate, maxOf(min, rate * BUFFER_TARGET_MS / 1000 * 2))
         }
-        error("No supported USB input format")
+        error("No supported input format")
     }
 
     private fun choosePlaybackRate(device: AudioDeviceInfo?): Int {
@@ -415,15 +514,110 @@ object AndroidUsbAudioBridge {
         return sampleRates.firstOrNull { it in rates } ?: rates.first()
     }
 
+    private fun AudioDeviceInfo.isSupportedInputDevice(): Boolean = isUsbAudioDevice() || isBuiltinMicDevice()
+
+    private fun AudioDeviceInfo.isSupportedOutputDevice(): Boolean = isUsbAudioDevice() || isBuiltinSpeakerDevice()
+
     private fun AudioDeviceInfo.isUsbAudioDevice(): Boolean = type == AudioDeviceInfo.TYPE_USB_DEVICE || type == AudioDeviceInfo.TYPE_USB_HEADSET
+
+    private fun AudioDeviceInfo.isBuiltinMicDevice(): Boolean = type == AudioDeviceInfo.TYPE_BUILTIN_MIC
+
+    private fun AudioDeviceInfo.isBuiltinSpeakerDevice(): Boolean =
+        type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
+            (Build.VERSION.SDK_INT >= 31 && type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE)
 
     private fun AudioDeviceInfo.toBridgeDevice(direction: String): UsbAudioDevice = UsbAudioDevice(
         id = id,
         direction = direction,
-        name = productName?.toString()?.takeIf { it.isNotBlank() } ?: "USB Audio $id",
+        kind = when {
+            isUsbAudioDevice() -> AudioRoute.USB
+            isBuiltinMicDevice() -> AudioRoute.BUILTIN_MIC
+            isBuiltinSpeakerDevice() -> AudioRoute.BUILTIN_SPEAKER
+            else -> "unknown"
+        },
+        type = type,
+        name = productName?.toString()?.takeIf { it.isNotBlank() } ?: fallbackDeviceName(),
         sampleRates = sampleRates.toList(),
         channelCounts = channelCounts.toList(),
     )
+
+    private fun AudioDeviceInfo.fallbackDeviceName(): String = when {
+        isBuiltinMicDevice() -> "Phone microphone"
+        isBuiltinSpeakerDevice() -> "Phone speaker"
+        isUsbAudioDevice() -> "USB Audio $id"
+        else -> "Audio device $id"
+    }
+
+    private fun AudioDeviceInfo.describe(): String = "${fallbackDeviceName()}(id=$id,type=$type,name=${productName ?: "unknown"})"
+
+    private fun buildRecorder(format: AudioFormat, bufferSize: Int, device: AudioDeviceInfo): AudioRecordBuild {
+        val sources = if (device.isBuiltinMicDevice()) {
+            listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.DEFAULT)
+        } else {
+            listOf(MediaRecorder.AudioSource.DEFAULT)
+        }
+        var lastError: Throwable? = null
+        for (source in sources.distinct()) {
+            try {
+                val recorder = AudioRecord.Builder()
+                    .setAudioSource(source)
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(bufferSize)
+                    .build()
+                if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                    return AudioRecordBuild(recorder, source)
+                }
+                recorder.release()
+            } catch (error: Throwable) {
+                lastError = error
+            }
+        }
+        lastError?.let { throw it }
+        error("AudioRecord failed to initialize")
+    }
+
+    private fun shouldRestartForDeviceChange(devices: Array<out AudioDeviceInfo>): Boolean {
+        if (!running) return false
+        val current = status
+        if (current.selectedInputRoute == AudioRoute.AUTO || current.selectedOutputRoute == AudioRoute.AUTO) return true
+        val activeInputId = current.activeInputDevice?.id
+        val activeOutputId = current.activeOutputDevice?.id
+        return devices.any { device ->
+            device.id == activeInputId || device.id == activeOutputId ||
+                (current.selectedInputRoute == AudioRoute.USB && device.isUsbAudioDevice() && device.isSource) ||
+                (current.selectedOutputRoute == AudioRoute.USB && device.isUsbAudioDevice() && device.isSink)
+        }
+    }
+
+    private fun unavailableRouteMessage(input: AudioDeviceSelection, output: AudioDeviceSelection): String? = when {
+        input.device == null && output.device == null -> "Selected input and output audio routes are unavailable"
+        input.device == null -> "Selected input audio route is unavailable"
+        output.device == null -> "Selected output audio route is unavailable"
+        else -> null
+    }
+
+    private fun getSelectedInputRoute(): String =
+        normalizeInputRoute(BridgeRuntime.getStringPreference(BridgeRuntime.PREF_AUDIO_INPUT_ROUTE, AudioRoute.AUTO))
+
+    private fun getSelectedOutputRoute(): String =
+        normalizeOutputRoute(BridgeRuntime.getStringPreference(BridgeRuntime.PREF_AUDIO_OUTPUT_ROUTE, AudioRoute.AUTO))
+
+    private fun normalizeInputRoute(route: String): String = when (route) {
+        AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_MIC -> route
+        else -> AudioRoute.AUTO
+    }
+
+    private fun normalizeOutputRoute(route: String): String = when (route) {
+        AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_SPEAKER -> route
+        else -> AudioRoute.AUTO
+    }
+
+    private fun sourceName(source: Int): String = when (source) {
+        MediaRecorder.AudioSource.UNPROCESSED -> "UNPROCESSED"
+        MediaRecorder.AudioSource.VOICE_RECOGNITION -> "VOICE_RECOGNITION"
+        MediaRecorder.AudioSource.DEFAULT -> "DEFAULT"
+        else -> source.toString()
+    }
 
     private fun update(next: UsbAudioStatus) {
         status = next
@@ -449,6 +643,10 @@ object AndroidUsbAudioBridge {
     }
 
     private data class AudioFormatChoice(val sampleRate: Int, val bufferSize: Int)
+
+    private data class AudioDeviceSelection(val route: String, val device: AudioDeviceInfo?)
+
+    private data class AudioRecordBuild(val recorder: AudioRecord, val audioSource: Int)
 
     private data class PcmChunk(
         val bytes: ByteArray,
@@ -647,6 +845,8 @@ object AndroidUsbAudioBridge {
 data class UsbAudioDevice(
     val id: Int,
     val direction: String,
+    val kind: String,
+    val type: Int,
     val name: String,
     val sampleRates: List<Int>,
     val channelCounts: List<Int>,
@@ -654,6 +854,10 @@ data class UsbAudioDevice(
 
 data class UsbAudioStatus(
     val state: String = "stopped",
+    val selectedInputRoute: String = AudioRoute.AUTO,
+    val selectedOutputRoute: String = AudioRoute.AUTO,
+    val activeInputDevice: UsbAudioDevice? = null,
+    val activeOutputDevice: UsbAudioDevice? = null,
     val inputDevices: List<UsbAudioDevice> = emptyList(),
     val outputDevices: List<UsbAudioDevice> = emptyList(),
     val error: String? = null,

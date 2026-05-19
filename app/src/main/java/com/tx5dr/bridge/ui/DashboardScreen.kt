@@ -57,6 +57,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -79,10 +82,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.tx5dr.bridge.AudioRoute
 import com.tx5dr.bridge.BridgeStatus
 import com.tx5dr.bridge.R
 import com.tx5dr.bridge.ReleasePreview
 import com.tx5dr.bridge.RuntimeState
+import com.tx5dr.bridge.UsbAudioDevice
 import com.tx5dr.bridge.UsbAudioStatus
 import com.tx5dr.bridge.UsbSerialStatus
 
@@ -109,6 +114,8 @@ fun DashboardScreen(
     onStopRuntime: () -> Unit,
     onOpenWebView: () -> Unit,
     onAuthorizeAudio: () -> Unit,
+    onSetAudioInputRoute: (String) -> Unit,
+    onSetAudioOutputRoute: (String) -> Unit,
     onStartSerial: () -> Unit,
     onSetKeepAlive: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
@@ -168,6 +175,8 @@ fun DashboardScreen(
                         onAudioClick = { detailSheet = DetailSheet.Audio },
                         onSerialClick = { detailSheet = DetailSheet.Serial },
                         onAuthorizeAudio = onAuthorizeAudio,
+                        onSetAudioInputRoute = onSetAudioInputRoute,
+                        onSetAudioOutputRoute = onSetAudioOutputRoute,
                         onSetKeepAlive = onSetKeepAlive,
                         onRefreshBridges = onRefreshBridges,
                         onOpenBatterySettings = onOpenBatterySettings,
@@ -207,6 +216,8 @@ fun DashboardScreen(
                     status = usbAudioStatus,
                     onDismiss = { detailSheet = null },
                     onAuthorizeAudio = onAuthorizeAudio,
+                    onSetInputRoute = onSetAudioInputRoute,
+                    onSetOutputRoute = onSetAudioOutputRoute,
                     onShowDiagnostics = {
                         detailSheet = null
                         onShowDiagnostics()
@@ -262,6 +273,8 @@ private fun DashboardContent(
     onAudioClick: () -> Unit,
     onSerialClick: () -> Unit,
     onAuthorizeAudio: () -> Unit,
+    onSetAudioInputRoute: (String) -> Unit,
+    onSetAudioOutputRoute: (String) -> Unit,
     onSetKeepAlive: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
     onOpenBatterySettings: () -> Unit,
@@ -555,11 +568,11 @@ private fun HardwareDock(
             Column {
                 HardwareListItem(
                     icon = Icons.Filled.GraphicEq,
-                    title = stringResource(R.string.usb_audio),
+                    title = stringResource(R.string.audio_route),
                     state = audioStatus.state,
                     supporting = when {
                         audioStatus.needsRecordAudioPermission() -> stringResource(R.string.mic_permission_required)
-                        else -> audioStatus.inputDevices.firstOrNull()?.name ?: audioStatus.outputDevices.firstOrNull()?.name ?: stringResource(R.string.usb_audio_auto_detect)
+                        else -> audioRouteSummary(audioStatus)
                     },
                     onClick = onAudioClick,
                 )
@@ -779,20 +792,82 @@ private fun AudioDetailSheet(
     status: UsbAudioStatus,
     onDismiss: () -> Unit,
     onAuthorizeAudio: () -> Unit,
+    onSetInputRoute: (String) -> Unit,
+    onSetOutputRoute: (String) -> Unit,
     onShowDiagnostics: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text(stringResource(R.string.usb_audio), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            StateChip(status.state)
-            DeviceList(stringResource(R.string.input_devices), status.inputDevices.map { it.name })
-            DeviceList(stringResource(R.string.output_devices), status.outputDevices.map { it.name })
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.audio_route),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                StateChip(status.state)
+            }
+            AudioRouteSection(
+                title = stringResource(R.string.input_route),
+                activeText = stringResource(R.string.active_input_format, displayAudioDeviceName(status.activeInputDevice)),
+                selectedRoute = status.selectedInputRoute,
+                routes = listOf(AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_MIC),
+                onSelect = onSetInputRoute,
+            )
+            AudioRouteSection(
+                title = stringResource(R.string.output_route),
+                activeText = stringResource(R.string.active_output_format, displayAudioDeviceName(status.activeOutputDevice)),
+                selectedRoute = status.selectedOutputRoute,
+                routes = listOf(AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_SPEAKER),
+                onSelect = onSetOutputRoute,
+            )
+            if (usesBuiltinAudio(status)) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        stringResource(R.string.phone_audio_notice),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onAuthorizeAudio) { Text(if (status.state == "streaming") stringResource(R.string.audio_reconnect) else stringResource(R.string.authorize_start)) }
                 OutlinedButton(onClick = onShowDiagnostics) { Text(stringResource(R.string.related_logs)) }
             }
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun AudioRouteSection(
+    title: String,
+    activeText: String,
+    selectedRoute: String,
+    routes: List<String>,
+    onSelect: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(activeText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            routes.forEachIndexed { index, route ->
+                SegmentedButton(
+                    selected = selectedRoute == route,
+                    onClick = { onSelect(route) },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = routes.size),
+                ) {
+                    Text(audioRouteSegmentLabel(route), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 }
@@ -831,6 +906,56 @@ private fun DeviceList(title: String, values: List<String>) {
             values.forEach { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
+}
+
+@Composable
+private fun audioRouteSummary(status: UsbAudioStatus): String {
+    val input = status.activeInputDevice ?: preferredInputDevice(status)
+    val output = status.activeOutputDevice ?: preferredOutputDevice(status)
+    return stringResource(
+        R.string.audio_route_summary,
+        displayAudioDeviceName(input),
+        displayAudioDeviceName(output),
+    )
+}
+
+@Composable
+private fun displayAudioDeviceName(device: UsbAudioDevice?): String {
+    if (device == null) return stringResource(R.string.no_device_detected)
+    return when (device.kind) {
+        AudioRoute.BUILTIN_MIC -> stringResource(R.string.phone_microphone)
+        AudioRoute.BUILTIN_SPEAKER -> stringResource(R.string.phone_speaker)
+        else -> device.name
+    }
+}
+
+@Composable
+private fun audioRouteSegmentLabel(route: String): String = when (route) {
+    AudioRoute.AUTO -> stringResource(R.string.audio_route_auto)
+    AudioRoute.USB -> stringResource(R.string.usb_sound_card)
+    AudioRoute.BUILTIN_MIC -> stringResource(R.string.audio_route_mic_short)
+    AudioRoute.BUILTIN_SPEAKER -> stringResource(R.string.audio_route_speaker_short)
+    else -> route
+}
+
+private fun usesBuiltinAudio(status: UsbAudioStatus): Boolean =
+    status.selectedInputRoute == AudioRoute.BUILTIN_MIC ||
+        status.selectedOutputRoute == AudioRoute.BUILTIN_SPEAKER ||
+        status.activeInputDevice?.kind == AudioRoute.BUILTIN_MIC ||
+        status.activeOutputDevice?.kind == AudioRoute.BUILTIN_SPEAKER
+
+private fun preferredInputDevice(status: UsbAudioStatus): UsbAudioDevice? = when (status.selectedInputRoute) {
+    AudioRoute.USB -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
+    AudioRoute.BUILTIN_MIC -> status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
+    else -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
+        ?: status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
+}
+
+private fun preferredOutputDevice(status: UsbAudioStatus): UsbAudioDevice? = when (status.selectedOutputRoute) {
+    AudioRoute.USB -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
+    AudioRoute.BUILTIN_SPEAKER -> status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
+    else -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
+        ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
 }
 
 private fun usbSerialState(status: UsbSerialStatus): String = when {

@@ -53,10 +53,25 @@
     <string name="cd_diagnostics_settings">診断と設定</string>
 
     <string name="radio_connection">無線機接続</string>
+    <string name="audio_route">オーディオ経路</string>
     <string name="usb_audio">USB オーディオ</string>
     <string name="usb_serial">USB シリアル</string>
     <string name="mic_permission_required">マイク権限が必要です</string>
     <string name="usb_audio_auto_detect">USB サウンドカードを接続すると自動検出します。</string>
+    <string name="audio_route_auto">自動</string>
+    <string name="usb_sound_card">USB サウンドカード</string>
+    <string name="phone_microphone">スマートフォンのマイク</string>
+    <string name="phone_speaker">スマートフォンのスピーカー</string>
+    <string name="audio_route_mic_short">マイク</string>
+    <string name="audio_route_speaker_short">スピーカー</string>
+    <string name="input_route">入力経路</string>
+    <string name="output_route">出力経路</string>
+    <string name="active_input_format">現在の入力: %1$s</string>
+    <string name="active_output_format">現在の出力: %1$s</string>
+    <string name="audio_route_summary">入力: %1$s · 出力: %2$s</string>
+    <string name="phone_audio_notice">スマートフォンの音声はモニターや一時的なテスト向けです。無線機への送信音声には USB オーディオを推奨します。</string>
+    <string name="phone_mic_notice">スマートフォンのマイクは一時的な受信やテスト向けで、周囲のノイズを拾いやすくなります。</string>
+    <string name="phone_speaker_notice">スマートフォンのスピーカーはモニターやテスト向けです。無線機への送信音声には USB オーディオを推奨します。</string>
     <string name="serial_auto_detect">無線機の CAT シリアルを接続すると自動検出します。</string>
     <string name="keep_alive_mode">常駐モード</string>
     <string name="keep_alive_subtitle">画面オフ中もバックグラウンドサービスを維持します。</string>
@@ -64,7 +79,7 @@
     <string name="go_battery_optimization_settings">バッテリー最適化設定を開く</string>
 
     <string name="mic_permission_denied_title">マイク権限が拒否されました</string>
-    <string name="mic_permission_allow_title">USB オーディオのためマイクを許可</string>
+    <string name="mic_permission_allow_title">オーディオ入力のためマイクを許可</string>
     <string name="mic_permission_notice">サービスは継続できますが、この権限がないと無線機の音声を受信できません。</string>
 
     <string name="install_dialog_title">TX-5DR エンジンをインストール</string>

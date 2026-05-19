@@ -53,10 +53,25 @@
     <string name="cd_diagnostics_settings">Diagnostics and settings</string>
 
     <string name="radio_connection">Radio connection</string>
+    <string name="audio_route">Audio route</string>
     <string name="usb_audio">USB audio</string>
     <string name="usb_serial">USB serial</string>
     <string name="mic_permission_required">Microphone permission required</string>
     <string name="usb_audio_auto_detect">Plug in a USB sound card to auto-detect.</string>
+    <string name="audio_route_auto">Auto</string>
+    <string name="usb_sound_card">USB sound card</string>
+    <string name="phone_microphone">Phone microphone</string>
+    <string name="phone_speaker">Phone speaker</string>
+    <string name="audio_route_mic_short">Mic</string>
+    <string name="audio_route_speaker_short">Speaker</string>
+    <string name="input_route">Input route</string>
+    <string name="output_route">Output route</string>
+    <string name="active_input_format">Active input: %1$s</string>
+    <string name="active_output_format">Active output: %1$s</string>
+    <string name="audio_route_summary">Input: %1$s · Output: %2$s</string>
+    <string name="phone_audio_notice">Phone audio is useful for monitoring or temporary tests. For radio transmit audio, USB audio remains the safer choice.</string>
+    <string name="phone_mic_notice">Phone microphone is best for temporary receiving or testing and may pick up room noise.</string>
+    <string name="phone_speaker_notice">Phone speaker is best for monitoring or testing; USB audio is still recommended for radio transmit audio.</string>
     <string name="serial_auto_detect">Connect the radio CAT serial port to auto-detect.</string>
     <string name="keep_alive_mode">Keep-alive mode</string>
     <string name="keep_alive_subtitle">Keep background services running while the screen is off.</string>
@@ -64,7 +79,7 @@
     <string name="go_battery_optimization_settings">Open battery optimization settings</string>
 
     <string name="mic_permission_denied_title">Microphone permission denied</string>
-    <string name="mic_permission_allow_title">Allow microphone for USB audio</string>
+    <string name="mic_permission_allow_title">Allow microphone for audio routing</string>
     <string name="mic_permission_notice">The service can continue, but radio audio cannot be received without this permission.</string>
 
     <string name="install_dialog_title">Install TX-5DR engine</string>

@@ -53,10 +53,25 @@
     <string name="cd_diagnostics_settings">诊断与设置</string>
 
     <string name="radio_connection">电台连接</string>
+    <string name="audio_route">音频路由</string>
     <string name="usb_audio">USB 音频</string>
     <string name="usb_serial">USB 串口</string>
     <string name="mic_permission_required">需要允许麦克风权限</string>
     <string name="usb_audio_auto_detect">插入 USB 声卡后自动检测</string>
+    <string name="audio_route_auto">自动</string>
+    <string name="usb_sound_card">USB 声卡</string>
+    <string name="phone_microphone">手机麦克风</string>
+    <string name="phone_speaker">手机扬声器</string>
+    <string name="audio_route_mic_short">麦克风</string>
+    <string name="audio_route_speaker_short">扬声器</string>
+    <string name="input_route">输入路由</string>
+    <string name="output_route">输出路由</string>
+    <string name="active_input_format">当前输入：%1$s</string>
+    <string name="active_output_format">当前输出：%1$s</string>
+    <string name="audio_route_summary">输入：%1$s · 输出：%2$s</string>
+    <string name="phone_audio_notice">手机音频适合监听或临时测试。电台发射音频仍建议使用 USB 音频。</string>
+    <string name="phone_mic_notice">手机麦克风适合临时接收或测试，可能会受到环境噪声影响。</string>
+    <string name="phone_speaker_notice">手机扬声器适合监听或测试；电台发射音频仍建议使用 USB 音频。</string>
     <string name="serial_auto_detect">连接电台 CAT 串口后自动检测</string>
     <string name="keep_alive_mode">值守模式</string>
     <string name="keep_alive_subtitle">息屏时保持后台服务运行</string>
@@ -64,7 +79,7 @@
     <string name="go_battery_optimization_settings">前往电池优化设置</string>
 
     <string name="mic_permission_denied_title">麦克风权限已拒绝</string>
-    <string name="mic_permission_allow_title">允许麦克风以启用 USB 音频</string>
+    <string name="mic_permission_allow_title">允许麦克风以启用音频输入</string>
     <string name="mic_permission_notice">服务可继续运行，但没有此权限无法接收电台音频。</string>
 
     <string name="install_dialog_title">安装 TX-5DR 引擎</string>

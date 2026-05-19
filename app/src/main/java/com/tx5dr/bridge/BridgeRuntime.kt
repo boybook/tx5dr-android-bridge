@@ -73,6 +73,12 @@ object BridgeRuntime {
         prefs.edit().putBoolean(key, value).apply()
     }
 
+    fun getStringPreference(key: String, defaultValue: String): String = prefs.getString(key, defaultValue) ?: defaultValue
+
+    fun setStringPreference(key: String, value: String) {
+        prefs.edit().putString(key, value).apply()
+    }
+
     fun snapshotStatus(): BridgeStatus = status
 
     fun bootstrap() {
@@ -896,4 +902,6 @@ wait -n ${'$'}input_pid ${'$'}output_pid
     const val PREF_AUTO_OPEN_WEBVIEW = "autoOpenWebView"
     const val PREF_SERVICE_ONLY_MODE = "serviceOnlyMode"
     const val PREF_KEEP_ALIVE_ENABLED = "keepAliveEnabled"
+    const val PREF_AUDIO_INPUT_ROUTE = "audioInputRoute"
+    const val PREF_AUDIO_OUTPUT_ROUTE = "audioOutputRoute"
 }

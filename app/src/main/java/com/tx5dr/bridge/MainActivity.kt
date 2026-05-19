@@ -100,6 +100,8 @@ class MainActivity : ComponentActivity() {
                     onStopRuntime = { stopRuntime() },
                     onOpenWebView = { openWebView() },
                     onAuthorizeAudio = { authorizeAudio() },
+                    onSetAudioInputRoute = { AndroidUsbAudioBridge.setInputRoute(this@MainActivity, it) },
+                    onSetAudioOutputRoute = { AndroidUsbAudioBridge.setOutputRoute(this@MainActivity, it) },
                     onStartSerial = { startSerialWithPermission() },
                     onSetKeepAlive = { setKeepAlive(it) },
                     onOpenBatterySettings = { openBatterySettings() },
