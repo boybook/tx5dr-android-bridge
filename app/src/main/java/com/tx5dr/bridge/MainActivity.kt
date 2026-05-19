@@ -362,7 +362,7 @@ class MainActivity : ComponentActivity() {
                     if (generation == webLoadGeneration && view === nativeWebView) {
                         webPageCommitted = false
                         webLoadStartedAtMs = System.currentTimeMillis()
-                        showWebLoadingOverlay(getString(R.string.webview_loading_title), getString(R.string.webview_loading_message))
+                        showWebLoadingOverlay()
                         startWebLoadWatchdog(generation, this@MainActivity.lastWebViewUrl ?: url.orEmpty())
                     }
                 }
@@ -423,7 +423,7 @@ class MainActivity : ComponentActivity() {
                         if (webVisible) {
                             val restoreUrl = lastWebViewUrl
                             if (restoreUrl != null && webRetryCount < MAX_WEBVIEW_AUTO_RETRIES) {
-                                showWebLoadingOverlay(getString(R.string.webview_retrying_title), getString(R.string.webview_renderer_gone))
+                                showWebLoadingOverlay()
                                 rootContainer.post { showNativeWebView(restoreUrl, webRetryCount + 1) }
                             } else {
                                 showWebErrorOverlay(getString(R.string.webview_error_title), getString(R.string.webview_renderer_gone))
@@ -440,7 +440,7 @@ class MainActivity : ComponentActivity() {
         rootContainer.addView(webView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         rootContainer.addView(overlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         nativeWebView = webView
-        showWebLoadingOverlay(getString(R.string.webview_loading_title), getString(R.string.webview_loading_message))
+        showWebLoadingOverlay()
         webView.post {
             if (generation == webLoadGeneration && webView === nativeWebView) {
                 LogBus.i("WebView", "Loading ${url.substringBefore('?')} retry=$retryCount")
@@ -456,7 +456,7 @@ class MainActivity : ComponentActivity() {
             val elapsed = System.currentTimeMillis() - webLoadStartedAtMs
             LogBus.w("WebView", "No visible page commit after ${elapsed}ms")
             if (bridgeStatus.webHealthy && webRetryCount < MAX_WEBVIEW_AUTO_RETRIES) {
-                showWebLoadingOverlay(getString(R.string.webview_retrying_title), getString(R.string.webview_retrying_message))
+                showWebLoadingOverlay()
                 showNativeWebView(url, webRetryCount + 1)
             } else {
                 val message = if (bridgeStatus.webHealthy) {
@@ -477,31 +477,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun showWebLoadingOverlay(title: String, message: String) {
+    private fun showWebLoadingOverlay() {
         val overlay = webOverlayContainer ?: return
         overlay.removeAllViews()
         overlay.visibility = View.VISIBLE
         overlay.addView(
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                setPadding(48, 48, 48, 48)
-                addView(ProgressBar(this@MainActivity).apply { isIndeterminate = true })
-                addView(TextView(this@MainActivity).apply {
-                    text = title
-                    textSize = 22f
-                    setTextColor(if (isSystemDarkMode()) Color.WHITE else Color.rgb(34, 22, 25))
-                    gravity = Gravity.CENTER
-                    setPadding(0, 28, 0, 8)
-                })
-                addView(TextView(this@MainActivity).apply {
-                    text = message
-                    textSize = 14f
-                    setTextColor(if (isSystemDarkMode()) Color.rgb(231, 205, 211) else Color.rgb(95, 69, 76))
-                    gravity = Gravity.CENTER
-                })
-            },
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            ProgressBar(this).apply { isIndeterminate = true },
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
         )
     }
 
