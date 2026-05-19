@@ -29,7 +29,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import com.tx5dr.bridge.ui.DashboardScreen
-import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private var bridgeStatus by mutableStateOf(BridgeStatus())
@@ -248,13 +247,11 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onPageCommitVisible(view: WebView, url: String) {
-                    syncWebViewTheme(view)
                     installWebChromeProbe(view)
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
                     LogBus.i("WebView", "Page finished: ${url.substringBefore('?')}")
-                    syncWebViewTheme(view)
                     installWebChromeProbe(view)
                 }
 
@@ -275,40 +272,13 @@ class MainActivity : ComponentActivity() {
     private fun configureWebViewTheme(settings: WebSettings) {
         val darkMode = isSystemDarkMode()
         if (Build.VERSION.SDK_INT >= 33) {
+            // Let the TX-5DR web app stay in its default "system" mode via
+            // prefers-color-scheme; do not algorithmically rewrite page colors.
             settings.isAlgorithmicDarkeningAllowed = false
         } else if (Build.VERSION.SDK_INT >= 29) {
-            settings.forceDark = WebSettings.FORCE_DARK_OFF
+            settings.forceDark = WebSettings.FORCE_DARK_AUTO
         }
         LogBus.i("WebView", "System theme for WebView: ${if (darkMode) "dark" else "light"}")
-    }
-
-    private fun syncWebViewTheme(webView: WebView) {
-        val theme = if (isSystemDarkMode()) "dark" else "light"
-        val js = """
-            (function() {
-              const theme = ${JSONObject.quote(theme)};
-              try { localStorage.setItem('tx5dr-theme-mode', theme); } catch (error) {}
-              const root = document.documentElement;
-              const body = document.body;
-              if (root) {
-                root.classList.remove('light', 'dark');
-                root.classList.add(theme);
-                root.style.colorScheme = theme;
-              }
-              if (body) {
-                body.classList.remove('light', 'dark', 'text-foreground', 'bg-background');
-                body.classList.add(theme, 'text-foreground', 'bg-background');
-              }
-              let meta = document.querySelector('meta[name="color-scheme"]');
-              if (!meta) {
-                meta = document.createElement('meta');
-                meta.name = 'color-scheme';
-                document.head && document.head.appendChild(meta);
-              }
-              meta && meta.setAttribute('content', theme);
-            })();
-        """.trimIndent()
-        webView.evaluateJavascript(js, null)
     }
 
     private fun installWebChromeProbe(webView: WebView) {
