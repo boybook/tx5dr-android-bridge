@@ -13,24 +13,38 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-release-apk:
-    name: Build signed release APK
+    name: Build and publish nightly APK
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-
+    env:
+      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+      OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
+      OSS_REGION: ${{ secrets.OSS_REGION }}
+      ANDROID_BRIDGE_OBJECT_PREFIX: tx-5dr/android-bridge/nightly
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
 
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -149,37 +163,226 @@ jobs:
           echo "TX5DR_ANDROID_KEY_ALIAS=$TX5DR_ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "TX5DR_ANDROID_KEY_PASSWORD=$TX5DR_ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
 
-      - name: Prepare APK version
-        id: apk-version
+      - name: Check OSS secrets
         shell: bash
         run: |
           set -euo pipefail
+          missing=()
+          for name in OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET OSS_BUCKET OSS_ENDPOINT OSS_BASE_URL OSS_REGION; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required OSS secrets for nightly publishing: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Prepare APK version
+        id: apk-version
+        shell: bash
+        env:
+          TZ: UTC
+        run: |
+          set -euo pipefail
           short_sha="${GITHUB_SHA::7}"
+          build_stamp="$(date -u +'%Y%m%d%H%M')"
+          build_ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          display_ts="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          version_name="0.1.0-nightly.${build_stamp}+${short_sha}"
+          commit_title="$(git show -s --format=%s "$GITHUB_SHA")"
           echo "SHORT_SHA=$short_sha" >> "$GITHUB_ENV"
-          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "BUILD_TIMESTAMP=$build_ts" >> "$GITHUB_ENV"
+          echo "DISPLAY_TIMESTAMP=$display_ts" >> "$GITHUB_ENV"
+          echo "COMMIT_TITLE=$commit_title" >> "$GITHUB_ENV"
           echo "TX5DR_ANDROID_VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
-          echo "TX5DR_ANDROID_VERSION_NAME=0.1.0-main.${GITHUB_RUN_NUMBER}+${short_sha}" >> "$GITHUB_ENV"
+          echo "TX5DR_ANDROID_VERSION_NAME=$version_name" >> "$GITHUB_ENV"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "published_at=$build_ts" >> "$GITHUB_OUTPUT"
+          echo "display_timestamp=$display_ts" >> "$GITHUB_OUTPUT"
+          echo "commit_title=$commit_title" >> "$GITHUB_OUTPUT"
 
       - name: Build signed release APK
         run: ./gradlew assembleRelease
 
-      - name: Collect APK artifact
+      - name: Prepare recent commits metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-metadata
+          node - <<'EOF' > release-metadata/recent-commits.json
+          const { execFileSync } = require('node:child_process');
+          const lines = execFileSync('git', ['log', '-10', '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%s%x1f%cI'], { encoding: 'utf8' })
+            .split('\n')
+            .filter(Boolean);
+          const commits = lines.map((line) => {
+            const [id, short_id, title, published_at] = line.split('\x1f');
+            return { id, short_id, title, published_at };
+          });
+          process.stdout.write(JSON.stringify(commits));
+          EOF
+
+      - name: Collect APK artifact and manifest
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets
           src="app/build/outputs/apk/release/app-release.apk"
           test -s "$src" || { echo "Release APK not found: $src" >&2; exit 1; }
-          out="release-assets/TX-5DR-Android-Bridge-release-${GITHUB_RUN_NUMBER}-${SHORT_SHA}.apk"
+          safe_version="$(printf '%s' "$TX5DR_ANDROID_VERSION_NAME" | sed 's/[^A-Za-z0-9._-]/./g')"
+          out="release-assets/TX-5DR-Android-Bridge-${safe_version}-arm64.apk"
           cp "$src" "$out"
           (cd release-assets && sha256sum *.apk > SHA256SUMS)
+          public_base_url="${OSS_BASE_URL%/}/${ANDROID_BRIDGE_OBJECT_PREFIX}"
+          node scripts/generate-nightly-manifest.mjs \
+            --apk "$out" \
+            --output release-assets/latest.json \
+            --channel nightly \
+            --tag nightly-android-bridge \
+            --version "$TX5DR_ANDROID_VERSION_NAME" \
+            --version-code "$TX5DR_ANDROID_VERSION_CODE" \
+            --package-name com.tx5dr.bridge \
+            --commit "$GITHUB_SHA" \
+            --commit-title "$COMMIT_TITLE" \
+            --published-at "$BUILD_TIMESTAMP" \
+            --base-url "$public_base_url" \
+            --min-sdk 28 \
+            --target-sdk 34 \
+            --signed true \
+            --recent-commits-json "$(cat release-metadata/recent-commits.json)"
           ls -lh release-assets
           cat release-assets/SHA256SUMS
+
+      - name: Validate Android bridge manifest
+        shell: bash
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
+          if (manifest.product !== 'android-bridge') throw new Error('manifest product must be android-bridge');
+          if (manifest.channel !== 'nightly') throw new Error('manifest channel must be nightly');
+          if (manifest.tag !== 'nightly-android-bridge') throw new Error('manifest tag must be nightly-android-bridge');
+          if (manifest.package_name !== 'com.tx5dr.bridge') throw new Error('manifest package_name mismatch');
+          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
+            throw new Error('manifest missing recent_commits');
+          }
+          if (!Array.isArray(manifest.assets) || manifest.assets.length !== 1) throw new Error('manifest must contain exactly one asset');
+          const asset = manifest.assets[0];
+          if (asset.platform !== 'android' || asset.arch !== 'arm64' || asset.package_type !== 'apk') {
+            throw new Error('manifest asset must be android arm64 apk');
+          }
+          if (!asset.name.endsWith('.apk')) throw new Error(`unexpected artifact name: ${asset.name}`);
+          for (const field of ['url', 'url_cn', 'url_oss', 'url_global', 'sha256', 'size', 'min_sdk', 'target_sdk']) {
+            if (!asset[field]) throw new Error(`asset missing ${field}`);
+          }
+          if (asset.signed !== true) throw new Error('asset must be marked signed');
+          const artifactPath = path.join('release-assets', asset.name);
+          const data = fs.readFileSync(artifactPath);
+          if (data.length !== asset.size) throw new Error(`size mismatch for ${asset.name}`);
+          const sha256 = crypto.createHash('sha256').update(data).digest('hex');
+          if (sha256 !== asset.sha256) throw new Error(`sha256 mismatch for ${asset.name}`);
+          EOF
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TX-5DR-Android-Bridge-release-${{ github.run_number }}-${{ steps.apk-version.outputs.short_sha }}
+          name: TX-5DR-Android-Bridge-nightly-${{ steps.apk-version.outputs.short_sha }}
           path: release-assets/*
           if-no-files-found: error
           retention-days: 14
+
+      - name: Create or Update Nightly Android Bridge Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly-android-bridge
+          name: "Nightly Build — Android Bridge APK"
+          body: |
+            ## TX-5DR Nightly Build — Android Bridge APK
+
+            **Built at** （构建时间）: ${{ steps.apk-version.outputs.display_timestamp }}
+            **Version**: `${{ steps.apk-version.outputs.version_name }}`
+            **Commit**: [${{ steps.apk-version.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            **Branch**: ${{ github.ref_name }}
+
+            ### Android Bridge Manifest
+
+            ```text
+            https://dl.tx5dr.com/tx-5dr/android-bridge/nightly/latest.json
+            ```
+
+            ### Runtime Manifest
+
+            ```text
+            https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
+            ```
+
+            This release contains the signed Android APK only. The TX-5DR Linux runtime remains a separate downloadable runtime package consumed by the app.
+          allowUpdates: true
+          removeArtifacts: true
+          artifacts: "release-assets/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: true
+          makeLatest: false
+
+      - name: Install ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${OSSUTIL_VERSION:-2.2.1}"
+          archive="ossutil-${version}-linux-amd64.zip"
+          url="https://gosspublic.alicdn.com/ossutil/v2/${version}/${archive}"
+          install_dir="${GITHUB_WORKSPACE}/.tools/ossutil"
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "${tmp_dir}"' EXIT
+          mkdir -p "${install_dir}"
+          curl -fsSL -o "${tmp_dir}/${archive}" "${url}"
+          unzip -q "${tmp_dir}/${archive}" -d "${tmp_dir}/extracted"
+          ossutil_bin="$(find "${tmp_dir}/extracted" -type f -name ossutil | head -1)"
+          if [[ -z "${ossutil_bin}" ]]; then
+            echo "Failed to locate ossutil binary after extraction." >&2
+            exit 1
+          fi
+          install -m 0755 "${ossutil_bin}" "${install_dir}/ossutil"
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+
+      - name: Configure ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          oss_region="${OSS_REGION:-}"
+          oss_endpoint_host="${OSS_ENDPOINT#https://}"
+          oss_endpoint_host="${oss_endpoint_host#http://}"
+          oss_endpoint_host="${oss_endpoint_host%%/*}"
+          if [[ -z "${oss_region}" ]]; then
+            if [[ "${oss_endpoint_host}" =~ oss-([a-z0-9-]+)\.aliyuncs\.com$ ]]; then
+              oss_region="${BASH_REMATCH[1]}"
+            fi
+          fi
+          if [[ -z "${oss_region}" ]]; then
+            echo "Failed to determine OSS region from OSS_ENDPOINT=${OSS_ENDPOINT}" >&2
+            echo "Please configure the OSS_REGION GitHub secret, for example: cn-hangzhou" >&2
+            exit 1
+          fi
+          echo "Using OSS endpoint: ${OSS_ENDPOINT}"
+          echo "Using OSS region: ${oss_region}"
+          cat > "${RUNNER_TEMP}/.ossutilconfig" <<CONFIG
+          [Credentials]
+          language = EN
+          endpoint = ${OSS_ENDPOINT}
+          region = ${oss_region}
+          accessKeyID = ${OSS_ACCESS_KEY_ID}
+          accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
+          CONFIG
+
+      - name: Upload Android bridge APK to OSS
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in release-assets/*; do
+            ossutil cp "$file" "oss://${OSS_BUCKET}/${ANDROID_BRIDGE_OBJECT_PREFIX}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          done
+          ossutil cp "release-assets/latest.json" "oss://${OSS_BUCKET}/tx-5dr/android-bridge/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
