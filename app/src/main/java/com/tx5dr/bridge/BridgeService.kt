@@ -59,7 +59,7 @@ class BridgeService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "TX-5DR Bridge", NotificationManager.IMPORTANCE_LOW))
+            manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "TX-5DR", NotificationManager.IMPORTANCE_LOW))
         }
     }
 
@@ -81,10 +81,10 @@ class BridgeService : Service() {
         )
         val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return builder
-            .setContentTitle("TX-5DR Bridge")
+            .setContentTitle("TX-5DR")
             .setContentText(buildString {
-                append(status.runtimeState)
-                if (status.webHealthy) append(" · Web ready")
+                append(notificationStateLabel(status))
+                if (status.webHealthy) append(" · 服务运行中")
                 if (keepAlive) append(" · 值守中")
                 if (lan != null) append(" · ").append(lan.removePrefix("http://"))
             })
@@ -94,6 +94,20 @@ class BridgeService : Service() {
             .addAction(Notification.Action.Builder(com.tx5dr.bridge.R.drawable.ic_stat_tx5dr, "停止", stopIntent).build())
             .setOngoing(true)
             .build()
+    }
+
+    private fun notificationStateLabel(status: BridgeStatus): String {
+        if (status.error != null || status.runtimeState == RuntimeState.Error) return "需要处理"
+        if (status.serverHealthy && status.webHealthy) return "服务运行中"
+        return when (status.runtimeState) {
+            RuntimeState.NotInstalled -> "需要安装引擎"
+            RuntimeState.Installing -> "正在安装引擎"
+            RuntimeState.Installed -> "服务未启动"
+            RuntimeState.Starting, RuntimeState.Running -> "正在准备服务"
+            RuntimeState.Stopping -> "正在停止服务"
+            RuntimeState.Stopped -> "服务已停止"
+            RuntimeState.Error -> "需要处理"
+        }
     }
 
     private fun updateNotification() {
