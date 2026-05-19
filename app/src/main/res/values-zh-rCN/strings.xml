@@ -80,6 +80,10 @@
     <string name="keep_alive_subtitle">息屏时保持后台服务运行</string>
     <string name="battery_optimization_settings">电池优化设置</string>
     <string name="go_battery_optimization_settings">前往电池优化设置</string>
+    <string name="notification_permission_settings">系统通知权限</string>
+    <string name="notification_permission_granted">已允许。WebView 内的 QSO 提醒可使用 Android 系统通知。</string>
+    <string name="notification_permission_denied">未允许。请打开系统设置，为 TX-5DR 允许通知。</string>
+    <string name="notification_permission_default">尚未配置。可打开系统设置，或在 TX-5DR 内启用提醒时授权。</string>
 
     <string name="mic_permission_denied_title">麦克风权限已拒绝</string>
     <string name="mic_permission_allow_title">允许麦克风以启用音频输入</string>

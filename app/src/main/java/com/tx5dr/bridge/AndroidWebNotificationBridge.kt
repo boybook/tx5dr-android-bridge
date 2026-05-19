@@ -20,9 +20,11 @@ import java.util.concurrent.CopyOnWriteArrayList
 class AndroidWebNotificationBridge(
     private val activity: MainActivity,
     webView: WebView,
+    initialUrl: String,
 ) {
     private val webViewRef = WeakReference(webView)
     private val pendingPermissionRequestIds = CopyOnWriteArrayList<String>()
+    @Volatile private var trustedWebView = isTrustedUrl(initialUrl)
 
     init {
         createEventChannel(activity)
@@ -118,6 +120,10 @@ class AndroidWebNotificationBridge(
         pendingPermissionRequestIds.clear()
     }
 
+    fun updateUrl(url: String?) {
+        trustedWebView = isTrustedUrl(url)
+    }
+
     private fun dispatchPermissionResult(requestId: String, permission: String) {
         val js = "window.__tx5drAndroidNotificationPermissionResult && " +
             "window.__tx5drAndroidNotificationPermissionResult(${JSONObject.quote(requestId)}, ${JSONObject.quote(permission)})"
@@ -128,9 +134,7 @@ class AndroidWebNotificationBridge(
 
 
     private fun isTrustedWebView(): Boolean {
-        val url = webViewRef.get()?.url ?: return false
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
-        return uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == 8076
+        return trustedWebView
     }
 
     private fun parsePayload(payloadJson: String?): NotificationPayload? {
@@ -160,6 +164,11 @@ class AndroidWebNotificationBridge(
         private const val PERMISSION_GRANTED = "granted"
         private const val PERMISSION_DENIED = "denied"
         private const val PERMISSION_DEFAULT = "default"
+
+        private fun isTrustedUrl(url: String?): Boolean {
+            val uri = runCatching { Uri.parse(url ?: return false) }.getOrNull() ?: return false
+            return uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == 8076
+        }
 
         fun readPermissionState(context: Context): String {
             val manager = context.getSystemService(NotificationManager::class.java)

@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
     private var releasePreviewError by mutableStateOf<String?>(null)
     private var showLogSheet by mutableStateOf(false)
     private var showSettingsSheet by mutableStateOf(false)
+    private var notificationPermissionState by mutableStateOf("default")
     private var webVisible by mutableStateOf(false)
     private var webSuppressedForSession by mutableStateOf(false)
     private var micWanted = false
@@ -94,6 +95,7 @@ class MainActivity : ComponentActivity() {
                     releasePreviewError = releasePreviewError,
                     showLogSheet = showLogSheet,
                     showSettingsSheet = showSettingsSheet,
+                    notificationPermissionState = notificationPermissionState,
                     controlSystemBars = !webVisible,
                     onInstallClick = { prepareInstallDialog() },
                     onConfirmInstall = { showInstallDialog = false; startInstall() },
@@ -107,6 +109,7 @@ class MainActivity : ComponentActivity() {
                     onStartSerial = { startSerialWithPermission() },
                     onSetKeepAlive = { setKeepAlive(it) },
                     onOpenBatterySettings = { openBatterySettings() },
+                    onOpenNotificationSettings = { openNotificationSettings() },
                     onRefreshBridges = { BridgeService.start(this@MainActivity, BridgeService.ACTION_START_BRIDGES) },
                     onShowLogs = { showLogSheet = true },
                     onDismissLogs = { showLogSheet = false },
@@ -144,6 +147,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         loadPreferences()
+        updateNotificationPermissionState()
         refreshLanUrls()
         AndroidUsbAudioBridge.refreshDevices(this)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
@@ -236,7 +240,7 @@ class MainActivity : ComponentActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             configureWebViewTheme(settings)
             addJavascriptInterface(WebChromeBridge(), WEB_CHROME_BRIDGE)
-            val notificationBridge = AndroidWebNotificationBridge(this@MainActivity, this)
+            val notificationBridge = AndroidWebNotificationBridge(this@MainActivity, this, url)
             webNotificationBridge = notificationBridge
             addJavascriptInterface(notificationBridge, WEB_NOTIFICATION_BRIDGE)
             if (BuildConfig.DEBUG) {
@@ -251,6 +255,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
             webViewClient = object : WebViewClient() {
+                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                    notificationBridge.updateUrl(url)
+                }
+
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     if (!request.isForMainFrame) return false
                     val requestUrl = request.url
@@ -261,10 +269,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onPageCommitVisible(view: WebView, url: String) {
+                    notificationBridge.updateUrl(url)
                     installWebChromeProbe(view)
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
+                    notificationBridge.updateUrl(url)
                     LogBus.i("WebView", "Page finished: ${url.substringBefore('?')}")
                     installWebChromeProbe(view)
                 }
@@ -528,6 +538,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openNotificationSettings() {
+        val intent = if (Build.VERSION.SDK_INT >= 26) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        }
+        runCatching { startActivity(intent) }.onFailure { openAppSettings() }
+    }
+
     private fun openAppSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }
@@ -535,6 +555,7 @@ class MainActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_POST_NOTIFICATIONS) {
+            updateNotificationPermissionState()
             webNotificationBridge?.onPermissionResult()
             return
         }
@@ -554,6 +575,10 @@ class MainActivity : ComponentActivity() {
             webSuppressedForSession = false
             openWebView()
         }
+    }
+
+    private fun updateNotificationPermissionState() {
+        notificationPermissionState = AndroidWebNotificationBridge.readPermissionState(this)
     }
 
     private fun copyToClipboard(value: String) {

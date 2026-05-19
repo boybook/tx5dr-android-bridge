@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
@@ -112,6 +113,7 @@ fun DashboardScreen(
     releasePreviewError: String?,
     showLogSheet: Boolean,
     showSettingsSheet: Boolean,
+    notificationPermissionState: String,
     controlSystemBars: Boolean = true,
     onInstallClick: () -> Unit,
     onConfirmInstall: () -> Unit,
@@ -126,6 +128,7 @@ fun DashboardScreen(
     onSetKeepAlive: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
     onOpenBatterySettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onShowLogs: () -> Unit,
     onDismissLogs: () -> Unit,
     onShowSettings: () -> Unit,
@@ -237,11 +240,13 @@ fun DashboardScreen(
                 SettingsSheet(
                     manifestUrl = manifestUrl,
                     autoOpenWebView = autoOpenWebView,
+                    notificationPermissionState = notificationPermissionState,
                     onDismiss = onDismissSettings,
                     onManifestUrlChange = onManifestUrlChange,
                     onAutoOpenWebViewChange = onAutoOpenWebViewChange,
                     onServiceOnlyModeChange = onServiceOnlyModeChange,
                     onOpenBatterySettings = onOpenBatterySettings,
+                    onOpenNotificationSettings = onOpenNotificationSettings,
                     onRefreshLan = onRefreshLan,
                     onInstallClick = onInstallClick,
                 )
@@ -819,11 +824,13 @@ private fun logLineColor(line: String): Color {
 private fun SettingsSheet(
     manifestUrl: String,
     autoOpenWebView: Boolean,
+    notificationPermissionState: String,
     onDismiss: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
     onOpenBatterySettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onRefreshLan: () -> Unit,
     onInstallClick: () -> Unit,
 ) {
@@ -860,6 +867,17 @@ private fun SettingsSheet(
                     title = stringResource(R.string.battery_optimization_settings),
                     subtitle = stringResource(R.string.battery_optimization_subtitle),
                     onClick = onOpenBatterySettings,
+                )
+                HorizontalDivider()
+                SettingsAction(
+                    icon = Icons.Filled.Notifications,
+                    title = stringResource(R.string.notification_permission_settings),
+                    subtitle = when (notificationPermissionState) {
+                        "granted" -> stringResource(R.string.notification_permission_granted)
+                        "denied" -> stringResource(R.string.notification_permission_denied)
+                        else -> stringResource(R.string.notification_permission_default)
+                    },
+                    onClick = onOpenNotificationSettings,
                 )
                 HorizontalDivider()
                 SettingsAction(

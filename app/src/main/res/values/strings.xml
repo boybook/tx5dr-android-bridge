@@ -80,6 +80,10 @@
     <string name="keep_alive_subtitle">Keep background services running while the screen is off.</string>
     <string name="battery_optimization_settings">Battery optimization settings</string>
     <string name="go_battery_optimization_settings">Open battery optimization settings</string>
+    <string name="notification_permission_settings">System notification permission</string>
+    <string name="notification_permission_granted">Allowed. WebView QSO reminders can use Android notifications.</string>
+    <string name="notification_permission_denied">Not allowed. Open system settings and allow notifications for TX-5DR.</string>
+    <string name="notification_permission_default">Not configured yet. Open system settings or enable reminders inside TX-5DR.</string>
 
     <string name="mic_permission_denied_title">Microphone permission denied</string>
     <string name="mic_permission_allow_title">Allow microphone for audio routing</string>
