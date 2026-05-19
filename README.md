@@ -1,47 +1,78 @@
-# TX-5DR Android Bridge PoC
+# TX-5DR Android
 
-Native Kotlin Android bridge for running the TX-5DR Linux runtime on Android through a Debian 13 arm64 PRoot environment.
+TX-5DR Android turns an Android 9+ arm64 phone or tablet into a portable TX-5DR radio gateway. The app runs the TX-5DR Linux runtime inside an app-private Debian PRoot environment, opens the TX-5DR web interface in an embedded WebView, and bridges Android audio, USB serial, notifications, and LAN/hotspot access into the runtime.
 
-This project is intentionally a PoC and is not Play Store-ready. The first target is a real arm64 Android 9+ phone installed through local ADB. The app name is `TX-5DR`, and the package id is `com.tx5dr.bridge`.
+- App name: `TX-5DR`
+- Package id: `com.tx5dr.bridge`
+- Supported devices: real arm64 Android 9+ devices (`minSdk 28`)
+- Distribution channel: signed nightly APK from the TX-5DR download site
+- Runtime channel: Android arm64 TX-5DR runtime manifest downloaded by the app
 
-## Goals
+This repository contains the Android shell and bridge layer only. The TX-5DR server/web runtime is published separately and installed or updated by the app from the runtime manifest.
 
-- Run a Debian 13 minbase rootfs inside Android app-private storage with PRoot.
-- Install TX-5DR portable Android runtime releases from a manifest URL.
-- Start the TX-5DR server on `127.0.0.1:4000` and the `client-tools` static/proxy service on `0.0.0.0:8076`.
-- Display the web UI in an Android WebView at `http://127.0.0.1:8076`.
-- Show hotspot/LAN URLs discovered by Kotlin, such as `http://192.168.43.1:8076` or `http://192.168.1.23:8076`, for browser access from devices connected to the phone hotspot or the same Wi-Fi.
-- Provide debug-only ADB commands for install/start/stop/log collection without touching the phone UI.
-- Bridge Android USB audio into Linux PulseAudio inside PRoot for RX/TX experiments.
-- Bridge Android USB serial into a Linux PTY path for Hamlib CAT experiments.
+## What It Provides
+
+- Productized Material 3 Android shell with light/dark TX-5DR rose theme.
+- First-run runtime install/update flow with sha256 verification and recoverable failures.
+- Embedded WebView entrypoint for `http://127.0.0.1:8076` with local admin-token injection.
+- LAN and phone-hotspot access through `client-tools` on port `8076`.
+- Android WebView notification bridge for TX-5DR system reminders.
+- Android audio route bridge with automatic USB-first behavior and manual phone mic/speaker fallback.
+- USB serial bridge for radio CAT/PTT through a Linux PTY visible inside PRoot.
+- Foreground service, optional keep-alive wake lock, diagnostics logs, and ADB debug helpers.
+
+## Download
+
+Nightly signed APK metadata is published at:
+
+```text
+https://dl.tx5dr.com/tx-5dr/android-bridge/nightly/latest.json
+```
+
+The APK manifest is separate from the TX-5DR runtime manifest consumed by the app:
+
+```text
+APK:     https://dl.tx5dr.com/tx-5dr/android-bridge/nightly/latest.json
+Runtime: https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
+```
+
+Nightly builds are intended for field testing. They are signed and installable, but they are not Play Store releases.
+
+## User Flow
+
+1. Install and open the APK.
+2. Grant microphone, notification, USB audio, or USB serial permissions only when the app asks for the relevant feature.
+3. Install or update the TX-5DR Android runtime when prompted.
+4. Start the service. When health checks pass, tap **Enter TX-5DR** or allow the app to open it automatically.
+5. Use the displayed LAN/hotspot URL from another device on the same network, or keep using the embedded WebView.
+6. Optional: enable keep-alive mode for long-running foreground operation while the screen is off.
 
 ## Architecture
 
 ```text
-Android app (Kotlin)
+Android app (Kotlin + Compose Material 3)
   MainActivity
-    - status panel
-    - manifest URL input
-    - install/start/stop buttons
-    - WebView
-    - log panel
+    - product dashboard
+    - settings and runtime logs
+    - native WebView overlay for TX-5DR
+    - Android notification JavaScript bridge
   BridgeService
-    - foreground service wrapper for long-running actions
+    - foreground service and keep-alive wake lock
   BridgeRuntime
-    - rootfs install
-    - TX-5DR release install/update
+    - Debian rootfs extraction
+    - TX-5DR runtime download, verification, and switching
     - PRoot process lifecycle
     - health checks for :4000 and :8076
   NetworkAccessProvider
-    - Android ConnectivityManager LAN IPv4 discovery
-    - writes runtime/android-network-access.json for Node services
+    - hotspot/LAN IPv4 discovery
+    - PRoot resolv.conf generation from Android DNS
+    - runtime/android-network-access.json for Node services
   AndroidUsbAudioBridge
-    - Android AudioManager USB audio enumeration
-    - AudioRecord USB/default input -> local TCP PCM stream on 127.0.0.1:4719
-    - local TCP PCM stream on 127.0.0.1:4720 -> AudioTrack USB/default output
+    - Android AudioRecord/AudioTrack route selection
+    - latest-frame PCM queues to avoid accumulated latency
+    - local TCP PCM streams on 127.0.0.1:4719 and :4720
   AndroidUsbSerialBridge
-    - Android UsbManager permission/device discovery
-    - usb-serial-for-android style CDC/CH34x/CP210x/FTDI/Prolific drivers
+    - USB Host API permission and device discovery
     - local framed serial bridge on 127.0.0.1:4721
 
 App private files directory
@@ -50,17 +81,18 @@ App private files directory
   runtime/tx5dr/current           symlink to active release
   runtime/tx5dr-data/             persistent TX-5DR data/config/log/cache
   runtime/tx5dr-data/android-dev/ virtual serial symlinks visible to Hamlib
-  runtime/host-libs/              Android-side versioned native library aliases
+  runtime/host-libs/              Android-side native library aliases
   runtime/proot-tmp/              PRoot temp directory
 
 PRoot Debian runtime
   /opt/tx5dr/current              active TX-5DR release
   /opt/tx5dr-data                 persistent data bind mount
+  /etc/resolv.conf                Android-generated DNS bind mount
   127.0.0.1:4000                  TX-5DR server
   0.0.0.0:8076                    client-tools LAN web proxy/static server
   127.0.0.1:4718                  PulseAudio native TCP protocol
-  127.0.0.1:4719                  Android USB audio input PCM stream
-  127.0.0.1:4720                  Android USB audio output PCM stream
+  127.0.0.1:4719                  Android audio input PCM stream
+  127.0.0.1:4720                  Android audio output PCM stream
   127.0.0.1:4721                  Android USB serial framed bridge
 ```
 
@@ -74,70 +106,58 @@ LAN browser
           tx5dr-server in PRoot, TX5DR_SERVER_HOST=127.0.0.1
 ```
 
-The Debian/Node side does not enumerate Android network interfaces. Kotlin writes `/opt/tx5dr-data/runtime/android-network-access.json`, and tx-5dr consumes it through `TX5DR_NETWORK_ACCESS_FILE`. This avoids Android/PRoot `uv_interface_addresses` permission failures while keeping desktop/Linux/macOS/Windows paths unchanged.
+The Debian/Node side does not enumerate Android network interfaces. Kotlin writes `/opt/tx5dr-data/runtime/android-network-access.json`, and TX-5DR consumes it through `TX5DR_NETWORK_ACCESS_FILE`. Kotlin also writes `/opt/tx5dr-data/runtime/resolv.conf` from Android DNS servers and bind-mounts it to `/etc/resolv.conf`, so runtime features such as updates, plugin marketplace access, and NTP hostname lookup work inside PRoot.
 
 ## Runtime Logic
 
-1. `Install/Update` first ensures the embedded Debian rootfs is extracted to `files/runtime/rootfs`.
-2. The app downloads the configured runtime manifest, selects the `android` + `arm64` tarball, downloads it, checks `sha256`, then extracts it to `files/runtime/tx5dr/releases/<version>`.
+1. Install/update first ensures the embedded Debian rootfs is extracted to `files/runtime/rootfs`.
+2. The app downloads the configured runtime manifest, selects the `android` + `arm64` tarball, checks `sha256`, then extracts it to `files/runtime/tx5dr/releases/<version>`.
 3. `files/runtime/tx5dr/current` is switched to the newly installed release. The symlink is relative (`releases/<version>`) so it remains visible after PRoot bind mounts `files/runtime/tx5dr` as `/opt/tx5dr`.
-4. `Start` prepares Android-side native host libraries, then launches PRoot with bind mounts for `/opt/tx5dr`, `/opt/tx5dr-data`, `/proc`, `/dev`, and `/sys`.
-5. Before startup, Kotlin refreshes `runtime/tx5dr-data/runtime/android-network-access.json` with LAN IPv4 addresses from Android `ConnectivityManager`, and `runtime/tx5dr-data/runtime/android-serial-devices.json` with Android USB serial PTY paths.
-6. Inside Debian, the startup script runs PulseAudio, starts the TX-5DR server on loopback, starts `client-tools` on `0.0.0.0:8076`, and keeps the PRoot process alive until either child exits or Android sends stop. Android starts the serial PTY helper as a separate supervised PRoot process so it can be debugged and restarted independently.
+4. Startup prepares Android-side native host libraries, refreshes LAN/DNS/serial state files, then launches PRoot with bind mounts for `/opt/tx5dr`, `/opt/tx5dr-data`, `/etc/resolv.conf`, `/proc`, `/dev`, and `/sys`.
+5. Inside Debian, the startup script starts PulseAudio, starts the TX-5DR server on loopback, starts `client-tools` on `0.0.0.0:8076`, and keeps the PRoot process alive until either child exits or Android sends stop.
+6. Android starts the serial PTY helper as a separate supervised PRoot process so it can be debugged and restarted independently.
 7. The Android side periodically health-checks `GET http://127.0.0.1:4000/api/hello` and `GET http://127.0.0.1:8076/`; LAN reachability is shown separately and does not affect local health.
 
 The Android runtime does not use `systemd` or `nginx`. Static web serving and API proxying are handled by `packages/client-tools/src/proxy.js`, matching the Electron-oriented client-tools path.
 
-## Native Packaging Notes
+## Build From Source
 
-Android 10+ should not execute binaries extracted into app-private writable storage. Runnable host tools are therefore packaged as native libraries under `app/src/main/jniLibs/arm64-v8a` after running `tools/fetch-proot.sh` and `tools/fetch-zstd.sh`.
-
-`tools/fetch-proot.sh` installs:
-
-- `libproot_exec.so`: Termux `proot` executable renamed for APK native packaging.
-- `libproot_loader.so`: 64-bit PRoot loader used through `PROOT_LOADER`.
-- `libproot_loader32.so`: 32-bit PRoot loader used through `PROOT_LOADER_32`.
-- `libtalloc.so`: Termux `libtalloc`; runtime recreates `libtalloc.so.2` in `files/runtime/host-libs`.
-
-At runtime the app sets `LD_LIBRARY_PATH`, `PROOT_TMP_DIR`, `PROOT_LOADER`, and `PROOT_LOADER_32` before launching PRoot. This mirrors the packaging pattern used by existing Android PRoot apps such as tiny_computer.
-
-## Prepare Assets
-
-A debug APK can be compiled without large runtime assets, but install/start will fail until the PRoot and rootfs assets exist.
+A debug APK can be compiled without large runtime assets, but install/start will fail until the PRoot, zstd, and rootfs assets exist.
 
 ```bash
 cd /Users/fangyizhou/Documents/coding/tx5dr-android-bridge
 ./tools/fetch-proot.sh
 ./tools/fetch-zstd.sh
 ./tools/build-rootfs.sh
+./gradlew assembleDebug
 ```
 
-`tools/build-rootfs.sh` requires Docker with `linux/arm64` support. It builds a Debian 13 rootfs with Node.js 22, PulseAudio, runtime libraries, and helper tools, then writes `app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz`.
+`tools/build-rootfs.sh` requires Docker with `linux/arm64` support. It builds a Debian 13 rootfs with Node.js 22, PulseAudio, runtime libraries, and helper tools, then writes:
 
-Large generated assets and downloaded native binaries are intentionally ignored by Git. Recreate them locally with the scripts above.
+```text
+app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
+```
 
-## Build And Install From macOS
+Generated runtime assets and downloaded native binaries are intentionally ignored by Git. Recreate them locally with the scripts above or let GitHub Actions build and cache them.
+
+## Install From macOS
 
 ```bash
 adb devices -l
 ./gradlew assembleDebug
-./gradlew installDebug
-adb logcat -s Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty
+adb install -r -d -t app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.tx5dr.bridge/.MainActivity
 ```
 
 If no device appears in `adb devices -l`, enable Developer Options and USB debugging on the phone, then accept the debugging authorization dialog.
 
 ## GitHub Actions Nightly APK
 
-Pushes to `main` build a signed nightly APK with `.github/workflows/android-apk.yml`, update the GitHub prerelease tag `nightly-android-bridge`, upload the APK to Aliyun OSS, and publish an APK manifest:
+Pushes to `main` build a signed nightly APK with `.github/workflows/android-apk.yml`, update the GitHub prerelease tag `nightly-android-bridge`, upload the APK to Aliyun OSS, and publish the APK manifest.
 
-```text
-https://dl.tx5dr.com/tx-5dr/android-bridge/nightly/latest.json
-```
+The workflow does not commit generated runtime assets. It downloads Termux PRoot/zstd, builds the Debian 13 arm64 rootfs with Docker/QEMU on cache miss, then stores those generated files in the GitHub Actions cache. Use the manual `workflow_dispatch` input `force_rebuild_assets=true` when Debian or Termux inputs need a forced refresh without changing scripts.
 
-The workflow does not commit generated runtime assets. It downloads Termux PRoot/zstd, builds the Debian 13 arm64 rootfs with Docker/QEMU on cache miss, then stores those generated files in the GitHub Actions cache. Use the manual `workflow_dispatch` input `force_rebuild_assets=true` when the Debian or Termux inputs need a forced refresh without changing scripts.
-
-Configure these repository secrets before relying on nightly publishing:
+Required repository secrets:
 
 - `TX5DR_ANDROID_KEYSTORE_BASE64`: base64-encoded Android release keystore.
 - `TX5DR_ANDROID_KEYSTORE_PASSWORD`
@@ -152,32 +172,9 @@ Configure these repository secrets before relying on nightly publishing:
 
 CI sets `TX5DR_ANDROID_VERSION_CODE` from the GitHub run number and `TX5DR_ANDROID_VERSION_NAME` to `0.1.0-nightly.<UTC yyyyMMddHHmm>+<short_sha>`. Local debug builds keep the default `0.1.0-poc` version.
 
-The Android Bridge APK manifest is separate from the TX-5DR Linux runtime manifest consumed by the app:
-
-```text
-APK:     https://dl.tx5dr.com/tx-5dr/android-bridge/nightly/latest.json
-Runtime: https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
-```
-
-To inspect the LAN bridge state after starting the runtime:
-
-```bash
-adb shell run-as com.tx5dr.bridge cat files/runtime/tx5dr-data/runtime/android-network-access.json
-adb shell run-as com.tx5dr.bridge cat files/runtime/tx5dr-data/runtime/client-tools-ready.json
-```
-
-
-Wireless ADB is useful once the phone USB port is connected to a radio instead of the Mac:
-
-```bash
-adb connect <phone-ip>:<wireless-debug-port>
-./tools/adb-debug.sh devices
-./tools/adb-debug.sh logs
-```
-
 ## Runtime Manifest
 
-The default manifest URL is:
+The default runtime manifest URL is:
 
 ```text
 https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
@@ -202,7 +199,7 @@ The app expects a manifest containing one Android arm64 tarball asset:
 }
 ```
 
-The app currently verifies HTTPS/download success, expected size when present, and `sha256`. It does not yet verify signed manifests.
+The app verifies HTTPS/download success, expected size when present, and `sha256`. It does not yet verify signed manifests.
 
 ## ADB Debug Control
 
@@ -216,6 +213,7 @@ Debug builds include an exported no-display `DebugCommandActivity` under `app/sr
 ./tools/adb-debug.sh start
 ./tools/adb-debug.sh stop
 ./tools/adb-debug.sh logs
+./tools/adb-debug.sh dns-smoke
 ```
 
 Common debug loops:
@@ -230,9 +228,6 @@ Common debug loops:
 ./tools/adb-debug.sh install-runtime
 ./tools/adb-debug.sh logs
 
-# Trigger runtime install/update with a custom manifest URL.
-./tools/adb-debug.sh install-runtime https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
-
 # Start/stop PRoot and inspect logs once.
 ./tools/adb-debug.sh clear-logs
 ./tools/adb-debug.sh start
@@ -240,9 +235,13 @@ sleep 8
 ./tools/adb-debug.sh logs-once
 ./tools/adb-debug.sh stop
 
-# USB audio controls. Android RECORD_AUDIO permission must already be granted.
+# DNS smoke inside the same PRoot bind setup used by the app.
+./tools/adb-debug.sh dns-smoke
+
+# Audio controls. Android RECORD_AUDIO permission must already be granted.
 ./tools/adb-debug.sh start-usb-audio
 ./tools/adb-debug.sh audio-smoke 3
+./tools/adb-debug.sh output-smoke
 ./tools/adb-debug.sh stop-usb-audio
 
 # USB serial controls. Use wireless ADB if the phone USB port is occupied by the radio.
@@ -253,15 +252,16 @@ sleep 8
 `logs` follows these tags:
 
 ```text
-Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty
+Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty NetworkAccess
 ```
 
-## USB Audio/Pulse Experiment
+## Audio Bridge
 
-The current audio experiment routes Android USB audio through Linux PulseAudio. If no USB audio device is present, Android may route the stream to its default input/output device:
+TX-5DR inside Linux still sees stable PulseAudio virtual devices. The Android side decides whether the physical route is USB audio or phone audio.
 
 ```text
-Android AudioRecord PCM s16le/mono/48000 preferred, 44100 fallback
+Android AudioRecord PCM s16le/mono/48000 preferred
+  -> latest-frame input queue
   -> 127.0.0.1:4719 TCP stream
   -> tx5dr-android-pulse-tcp tcp-to-sink inside Debian
   -> PulseAudio TX5DRAndroidInput null sink
@@ -270,10 +270,13 @@ Android AudioRecord PCM s16le/mono/48000 preferred, 44100 fallback
 TX-5DR Pulse output sink monitor
   -> tx5dr-android-pulse-tcp source-to-tcp inside Debian
   -> 127.0.0.1:4720 TCP stream
-  -> Android AudioTrack preferred USB output
+  -> latest-frame output queue
+  -> Android AudioTrack preferred output route
 ```
 
-After starting the runtime and enabling USB Audio, use the debug helper to prove Linux/Pulse can read non-empty PCM from the Android USB input:
+The default policy is USB-first automatic routing. Users can explicitly choose USB audio, phone microphone, or phone speaker from the Android shell. Latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
+
+After starting the runtime and enabling audio, use the debug helper to prove Linux/Pulse can read non-empty PCM from the Android input:
 
 ```bash
 ./tools/adb-debug.sh start
@@ -281,12 +284,12 @@ After starting the runtime and enabling USB Audio, use the debug helper to prove
 ./tools/adb-debug.sh audio-smoke 3
 ```
 
-The helper runs `pactl list short sources` and `parec -d TX5DRAndroidUsbInput` inside PRoot, then pulls the raw file back through `adb` and prints byte/nonzero/peak sample stats. A successful run should show `TX5DRAndroidUsbInput`, a non-zero `/tmp/android-usb-input.raw`, and `nonzero` samples greater than 0. Manual equivalent inside PRoot:
+Manual equivalent inside PRoot:
 
 ```bash
 pactl list short sources | grep TX5DRAndroidUsbInput
-timeout 3 parec -d TX5DRAndroidUsbInput --raw --rate=48000 --format=s16le --channels=1 > /tmp/android-usb-input.raw
-ls -lh /tmp/android-usb-input.raw
+timeout 3 parec -d TX5DRAndroidUsbInput --raw --rate=48000 --format=s16le --channels=1 > /tmp/android-input.raw
+ls -lh /tmp/android-input.raw
 ```
 
 Then check whether TX-5DR can enumerate the Pulse/RtAudio source:
@@ -295,11 +298,9 @@ Then check whether TX-5DR can enumerate the Pulse/RtAudio source:
 curl -s http://127.0.0.1:4000/api/audio/devices
 ```
 
-If Pulse/RtAudio is unreliable on Android PRoot, the next phase should switch to a dedicated Kotlin PCM bridge and a TX-5DR `android-host` audio backend.
+## USB Serial / Hamlib Bridge
 
-## USB Serial/Hamlib Experiment
-
-Android owns the physical USB device through `UsbManager`. Debian sees a PTY symlink generated by `tx5dr-android-serial-pty`:
+Android owns the physical USB serial device through `UsbManager`. Debian sees a PTY symlink generated by `tx5dr-android-serial-pty`:
 
 ```text
 Hamlib in PRoot
@@ -318,19 +319,27 @@ adb shell run-as com.tx5dr.bridge cat files/runtime/tx5dr-data/runtime/android-s
 adb shell run-as com.tx5dr.bridge ls -l files/runtime/tx5dr-data/android-dev
 ```
 
-Inside PRoot, Hamlib should use `/opt/tx5dr-data/android-dev/ttyUSB0` as the serial path. The helper currently forwards byte data and polls PTY termios changes to update baud/data bits/stop bits/parity on Android. DTR/RTS over PTY modem ioctls is experimental; if Android logs do not show control changes, use CAT PTT first and treat DTR/RTS/CW as the next dedicated host-control backend.
+Inside PRoot, Hamlib should use `/opt/tx5dr-data/android-dev/ttyUSB0` as the serial path. The helper forwards byte data and polls PTY termios changes to update baud/data bits/stop bits/parity on Android. DTR/RTS over PTY modem ioctls is experimental; if Android logs do not show control changes, use CAT PTT first and treat DTR/RTS/CW as a future dedicated host-control backend.
 
+## Open Source License
 
-## Third-Party Serial Driver Source
+This repository is licensed under **GNU GPL v3.0 or later**. See `LICENSE`.
 
-`app/src/main/java/com/bg7yoz/ft8cn/serialport/` contains a local copy of usb-serial-for-android style drivers used by FT8CN/upstream usb-serial-for-android, with original copyright headers retained in the source files. This avoids making the debug PoC depend on Maven/JitPack availability while testing USB CAT. Re-check upstream licensing and preferably switch back to a pinned Maven artifact before any public binary distribution.
+Important third-party components keep their own licenses. See `THIRD_PARTY_NOTICES.md` and `app/src/main/assets/licenses/THIRD_PARTY_NOTICES.txt` for the notice bundle that accompanies APK builds. In particular:
+
+- AndroidX, Jetpack Compose, Material 3, and Apache Commons Compress are Apache-2.0 licensed dependencies.
+- The local USB serial driver copy is derived from usb-serial-for-android style code with original copyright headers retained.
+- Generated APK assets may include separate executable components such as PRoot, zstd, libtalloc, and a Debian rootfs; these remain under their upstream licenses.
+- The downloaded TX-5DR Android runtime is a separate distribution channel and remains under the TX-5DR runtime's license terms.
+
+When distributing modified APKs, provide the corresponding source for this repository and preserve third-party notices and source-offer obligations for generated native/rootfs assets.
 
 ## Known Limits
 
 - Only arm64 real Android 9+ devices are targeted.
-- No Play Store compliance work has been done.
-- No background automatic updater or rollback UI yet.
+- No Play Store compliance, AAB release, or stable channel has been done.
+- Runtime self-update is implemented for the TX-5DR runtime; APK self-update installation is not implemented yet.
 - USB serial bridge is experimental: CAT byte I/O and termios baud/parity sync are implemented; DTR/RTS/CW over PTY modem lines still needs hardware validation.
-- Rootfs and runtime assets are large; future work should consider asset delivery or differential updates.
+- Rootfs and runtime assets are large; generated assets are built in CI/cache instead of committed to Git.
 - LAN browser access requires the client to be on a reachable network: either connected to the phone hotspot or on the same Wi-Fi. Wi-Fi AP isolation, cellular carrier addresses, VPNs, and aggressive vendor background limits can block inbound access.
 - LAN URLs never include the admin token. The embedded WebView uses local `127.0.0.1` with token injection, while LAN browsers must use the normal auth flow.
