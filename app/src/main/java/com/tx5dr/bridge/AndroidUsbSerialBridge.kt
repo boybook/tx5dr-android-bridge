@@ -5,9 +5,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import com.bg7yoz.ft8cn.serialport.UsbSerialDriver
 import com.bg7yoz.ft8cn.serialport.UsbSerialPort
 import com.bg7yoz.ft8cn.serialport.UsbSerialProber
 import org.json.JSONArray
@@ -18,14 +21,13 @@ import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.ByteBuffer
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 object AndroidUsbSerialBridge {
     private const val TAG = "UsbSerialBridge"
     private const val ACTION_USB_PERMISSION = "com.tx5dr.bridge.USB_PERMISSION"
-    private const val BRIDGE_PORT = 4721
+    private const val BASE_BRIDGE_PORT = 4721
     private const val READ_TIMEOUT_MS = 200
     private const val WRITE_TIMEOUT_MS = 2000
     private const val FRAME_DATA = 1
@@ -34,24 +36,39 @@ object AndroidUsbSerialBridge {
     private const val FRAME_STATUS = 4
 
     private val listeners = CopyOnWriteArrayList<(UsbSerialStatus) -> Unit>()
+    private val sessions = mutableMapOf<Int, SerialSession>()
+    private val deviceIndexByKey = mutableMapOf<String, Int>()
+    private val portErrors = mutableMapOf<Int, String>()
+    private val pendingPermissionDeviceIds = mutableSetOf<Int>()
+    private val deniedDeviceIds = mutableSetOf<Int>()
+    private var nextVirtualIndex = 0
+
     @Volatile private var status = UsbSerialStatus()
-    @Volatile private var running = false
+    @Volatile private var wanted = false
     private var app: Context? = null
     private var devicesFile: File? = null
-    private var serverSocket: ServerSocket? = null
-    private var clientSocket: Socket? = null
-    private var port: UsbSerialPort? = null
-    private var ioThread: Thread? = null
 
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != ACTION_USB_PERMISSION) return
+            val device = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
             val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-            LogBus.i(TAG, "USB serial permission result: granted=$granted")
-            if (granted) start(context, devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile) else update(status.copy(state = "permission-denied", error = "USB permission denied"))
+            device?.let {
+                pendingPermissionDeviceIds.remove(it.deviceId)
+                if (!granted) deniedDeviceIds.add(it.deviceId)
+            }
+            LogBus.i(TAG, "USB serial permission result: device=${device?.deviceId ?: "--"}, granted=$granted")
+            if (!granted) updateFromCurrentDevices("permission-denied", "USB permission denied")
+            startInternal(context, devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile, requestPermissions = true, resetDenied = false)
         }
     }
 
+    @Synchronized
     fun init(context: Context, targetFile: File) {
         app = context.applicationContext
         devicesFile = targetFile
@@ -68,136 +85,152 @@ object AndroidUsbSerialBridge {
         listeners.remove(listener)
     }
 
+    fun snapshotStatus(): UsbSerialStatus = status
+
+    @Synchronized
     fun refreshDevices(context: Context? = null, targetFile: File? = null): UsbSerialStatus {
         val context = context ?: app ?: return status
         val targetFile = targetFile ?: devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile
-        val manager = context.applicationContext.getSystemService(Context.USB_SERVICE) as UsbManager
-        val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager)
-        var pathIndex = 0
-        val devices = drivers.flatMap { driver ->
-            driver.ports.mapIndexed { portNum, _ ->
-                val virtualIndex = pathIndex++
-                val d = driver.device
-                AndroidSerialDevice(
-                    deviceId = d.deviceId,
-                    vendorId = d.vendorId,
-                    productId = d.productId,
-                    portNum = portNum,
-                    path = "/opt/tx5dr-data/android-dev/ttyUSB$virtualIndex",
-                    name = buildString {
-                        append(d.productName ?: d.deviceName ?: "USB Serial")
-                        append(" #$portNum")
-                    },
-                    granted = manager.hasPermission(d),
-                )
-            }
-        }
-        writeDevicesFile(targetFile, devices, running)
-        update(status.copy(devices = devices, error = null))
+        val devices = discoverPorts(context.applicationContext).map { it.device }
+        stopStaleSessions(devices)
+        updateFromDevices(targetFile, devices, preferredState = null, preferredError = null)
         return status
     }
 
+    @Synchronized
     fun start(context: Context? = null, targetFile: File? = null) {
-        val context = context ?: app ?: return
+        startInternal(context, targetFile, requestPermissions = true, resetDenied = true)
+    }
+
+    @Synchronized
+    fun startIfPermitted(context: Context? = null, targetFile: File? = null): Boolean {
+        return startInternal(context, targetFile, requestPermissions = false, resetDenied = false)
+    }
+
+    @Synchronized
+    fun stop() {
+        wanted = false
+        pendingPermissionDeviceIds.clear()
+        val activeSessions = sessions.values.toList()
+        sessions.clear()
+        activeSessions.forEach { it.stop() }
+        val target = devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile
+        val devices = (app?.let { discoverPorts(it).map { candidate -> candidate.device } } ?: status.devices).map { it.copy(active = false, connected = false) }
+        writeDevicesFile(target, devices, bridgeRunning = false)
+        update(status.copy(state = "stopped", devices = devices, activePath = null, mappedCount = 0, error = null))
+    }
+
+    @Synchronized
+    private fun startInternal(
+        context: Context? = null,
+        targetFile: File? = null,
+        requestPermissions: Boolean,
+        resetDenied: Boolean,
+    ): Boolean {
+        val context = context ?: app ?: return false
         val targetFile = targetFile ?: devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile
         val appContext = context.applicationContext
         app = appContext
         devicesFile = targetFile
         registerReceiver(appContext)
-        if (running) return
+        wanted = true
+        if (resetDenied) deniedDeviceIds.clear()
+
+        val candidates = discoverPorts(appContext)
+        if (candidates.isEmpty()) {
+            stopStaleSessions(emptyList())
+            updateFromDevices(targetFile, emptyList(), preferredState = "no-device", preferredError = if (requestPermissions) "No supported USB serial device" else null)
+            return false
+        }
+
+        stopStaleSessions(candidates.map { it.device })
+        var startedOrRunning = sessions.isNotEmpty()
         val manager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager
-        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
-        if (driver == null) {
-            refreshDevices(appContext, targetFile)
-            update(status.copy(state = "no-device", error = "No supported USB serial device"))
-            return
+        val ungrantedDevices = candidates
+            .map { it.driver.device }
+            .distinctBy { it.deviceId }
+            .filter { !manager.hasPermission(it) && it.deviceId !in deniedDeviceIds }
+
+        candidates.filter { it.device.granted }.forEach { candidate ->
+            if (sessions[candidate.device.virtualIndex]?.isAlive == true) return@forEach
+            startSession(manager, candidate)?.let { session ->
+                sessions[candidate.device.virtualIndex] = session
+                session.serverThread = thread(name = "tx5dr-usb-serial-server-${candidate.device.virtualIndex}") { serverLoop(session) }
+                startedOrRunning = true
+            }
         }
-        if (!manager.hasPermission(driver.device)) {
-            update(status.copy(state = "permission-required", error = null))
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getBroadcast(appContext, 0, Intent(ACTION_USB_PERMISSION).setPackage(appContext.packageName), flags)
-            manager.requestPermission(driver.device, pi)
-            return
-        }
-        val connection = manager.openDevice(driver.device)
+
+        val devicesAfterStart = discoverPorts(appContext).map { it.device }
+        if (requestPermissions) requestNextPermission(appContext, ungrantedDevices)
+        updateFromDevices(targetFile, devicesAfterStart, preferredState = null, preferredError = null)
+        return startedOrRunning
+    }
+
+    private fun startSession(manager: UsbManager, candidate: SerialPortCandidate): SerialSession? {
+        val connection = manager.openDevice(candidate.driver.device)
         if (connection == null) {
-            update(status.copy(state = "error", error = "Unable to open USB serial device"))
-            return
+            portErrors[candidate.device.virtualIndex] = "Unable to open USB serial device"
+            return null
         }
-        try {
-            val selectedPort = driver.ports.first()
+        return try {
+            val selectedPort = candidate.port
             selectedPort.open(connection)
             selectedPort.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            port = selectedPort
-            running = true
-            refreshDevices(appContext, targetFile)
-            writeDevicesFile(targetFile, status.devices, true)
-            update(status.copy(state = "starting", activePath = "/opt/tx5dr-data/android-dev/ttyUSB0", error = null))
-            thread(name = "tx5dr-usb-serial-server") { serverLoop(selectedPort) }
+            val session = SerialSession(candidate.device, selectedPort, connection)
+            portErrors.remove(candidate.device.virtualIndex)
+            LogBus.i(TAG, "Starting USB serial bridge ${candidate.device.path} on 127.0.0.1:${candidate.device.bridgePort}")
+            session
         } catch (error: Throwable) {
+            try { candidate.port.close() } catch (_: Throwable) {}
             try { connection.close() } catch (_: Throwable) {}
-            LogBus.e(TAG, "USB serial bridge start failed", error)
-            update(status.copy(state = "error", error = error.message))
+            portErrors[candidate.device.virtualIndex] = error.message ?: error.javaClass.simpleName
+            LogBus.e(TAG, "USB serial bridge ${candidate.device.path} start failed", error)
+            null
         }
     }
 
-    fun startIfPermitted(context: Context? = null, targetFile: File? = null): Boolean {
-        val context = context ?: app ?: return false
-        val targetFile = targetFile ?: devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile
-        val appContext = context.applicationContext
-        val manager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager
-        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
-        if (driver == null) {
-            refreshDevices(appContext, targetFile)
-            update(status.copy(state = "no-device", error = null))
-            return false
-        }
-        refreshDevices(appContext, targetFile)
-        if (!manager.hasPermission(driver.device)) {
-            update(status.copy(state = "permission-required", error = null))
-            return false
-        }
-        start(appContext, targetFile)
-        return true
+    private fun requestNextPermission(context: Context, devices: List<UsbDevice>) {
+        val device = devices.firstOrNull { it.deviceId !in pendingPermissionDeviceIds } ?: return
+        updateFromCurrentDevices("permission-required", null)
+        pendingPermissionDeviceIds.add(device.deviceId)
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        val pi = PendingIntent.getBroadcast(
+            context,
+            device.deviceId,
+            Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
+            flags,
+        )
+        LogBus.i(TAG, "Requesting USB serial permission for device=${device.deviceId}")
+        (context.getSystemService(Context.USB_SERVICE) as UsbManager).requestPermission(device, pi)
     }
 
-    fun stop() {
-        running = false
-        try { clientSocket?.close() } catch (_: Throwable) {}
-        try { serverSocket?.close() } catch (_: Throwable) {}
-        try { port?.close() } catch (_: Throwable) {}
-        port = null
-        ioThread?.join(1500)
-        writeDevicesFile(devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile, status.devices, false)
-        update(status.copy(state = "stopped", activePath = null))
-    }
-
-    private fun serverLoop(serialPort: UsbSerialPort) {
+    private fun serverLoop(session: SerialSession) {
         try {
-            ServerSocket(BRIDGE_PORT, 1, InetAddress.getByName("127.0.0.1")).use { server ->
-                serverSocket = server
-                LogBus.i(TAG, "USB serial bridge waiting on 127.0.0.1:$BRIDGE_PORT")
-                update(status.copy(state = "waiting-helper"))
+            ServerSocket(session.device.bridgePort, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+                session.serverSocket = server
+                LogBus.i(TAG, "USB serial bridge waiting on 127.0.0.1:${session.device.bridgePort} for ${session.device.path}")
+                updateFromCurrentDevices("waiting-helper", null)
                 server.accept().use { socket ->
-                    clientSocket = socket
-                    update(status.copy(state = "connected"))
-                    LogBus.i(TAG, "Linux serial PTY helper connected")
+                    session.clientSocket = socket
+                    session.connected = true
+                    updateFromCurrentDevices("connected", null)
+                    LogBus.i(TAG, "Linux serial PTY helper connected for ${session.device.path}")
                     val input = DataInputStream(socket.getInputStream())
                     val output = DataOutputStream(socket.getOutputStream())
-                    ioThread = thread(name = "tx5dr-usb-serial-read") {
+                    session.readThread = thread(name = "tx5dr-usb-serial-read-${session.device.virtualIndex}") {
                         val buffer = ByteArray(4096)
-                        while (running && !socket.isClosed) {
+                        while (session.running && !socket.isClosed) {
                             try {
-                                val n = serialPort.read(buffer, READ_TIMEOUT_MS)
+                                val n = session.port.read(buffer, READ_TIMEOUT_MS)
                                 if (n > 0) writeFrame(output, FRAME_DATA, buffer.copyOf(n))
                             } catch (_: java.net.SocketException) {
                                 break
                             } catch (error: Throwable) {
-                                if (running) LogBus.w(TAG, "USB serial read failed: ${error.message}")
+                                if (session.running) LogBus.w(TAG, "USB serial read failed for ${session.device.path}: ${error.message}")
                             }
                         }
                     }
-                    while (running && !socket.isClosed) {
+                    while (session.running && !socket.isClosed) {
                         val type = input.read()
                         if (type < 0) break
                         val length = input.readInt()
@@ -205,27 +238,30 @@ object AndroidUsbSerialBridge {
                         val payload = ByteArray(length)
                         input.readFully(payload)
                         when (type) {
-                            FRAME_DATA -> serialPort.write(payload, WRITE_TIMEOUT_MS)
-                            FRAME_CONFIG -> handleConfig(serialPort, payload)
-                            FRAME_CONTROL -> handleControl(serialPort, payload)
-                            FRAME_STATUS -> LogBus.i(TAG, "serial helper status: ${payload.decodeToString()}")
+                            FRAME_DATA -> session.port.write(payload, WRITE_TIMEOUT_MS)
+                            FRAME_CONFIG -> handleConfig(session.port, payload, session.device.path)
+                            FRAME_CONTROL -> handleControl(session.port, payload, session.device.path)
+                            FRAME_STATUS -> LogBus.i(TAG, "serial helper status ${session.device.path}: ${payload.decodeToString()}")
                         }
                     }
                 }
             }
         } catch (error: Throwable) {
-            if (running) {
-                LogBus.e(TAG, "USB serial bridge server failed", error)
-                update(status.copy(state = "error", error = error.message))
+            if (session.running) {
+                portErrors[session.device.virtualIndex] = error.message ?: error.javaClass.simpleName
+                LogBus.e(TAG, "USB serial bridge server failed for ${session.device.path}", error)
             }
         } finally {
-            clientSocket = null
-            serverSocket = null
-            if (running) update(status.copy(state = "disconnected"))
+            session.connected = false
+            synchronized(this) {
+                if (sessions[session.device.virtualIndex] == session) sessions.remove(session.device.virtualIndex)
+            }
+            session.stop()
+            if (wanted) updateFromCurrentDevices("disconnected", null)
         }
     }
 
-    private fun handleConfig(serialPort: UsbSerialPort, payload: ByteArray) {
+    private fun handleConfig(serialPort: UsbSerialPort, payload: ByteArray, path: String) {
         try {
             val json = JSONObject(payload.decodeToString())
             val baud = json.optInt("baud", 9600).coerceAtLeast(1)
@@ -243,20 +279,20 @@ object AndroidUsbSerialBridge {
                 else -> UsbSerialPort.PARITY_NONE
             }
             serialPort.setParameters(baud, dataBits, stopBits, parity)
-            LogBus.i(TAG, "USB serial config baud=$baud dataBits=$dataBits stopBits=${json.optInt("stopBits", 1)} parity=${json.optString("parity", "none")}")
+            LogBus.i(TAG, "USB serial config $path baud=$baud dataBits=$dataBits stopBits=${json.optInt("stopBits", 1)} parity=${json.optString("parity", "none")}")
         } catch (error: Throwable) {
-            LogBus.w(TAG, "Invalid serial config frame: ${error.message}")
+            LogBus.w(TAG, "Invalid serial config frame for $path: ${error.message}")
         }
     }
 
-    private fun handleControl(serialPort: UsbSerialPort, payload: ByteArray) {
+    private fun handleControl(serialPort: UsbSerialPort, payload: ByteArray, path: String) {
         try {
             val json = JSONObject(payload.decodeToString())
             if (json.has("dtr")) serialPort.setDTR(json.optBoolean("dtr"))
             if (json.has("rts")) serialPort.setRTS(json.optBoolean("rts"))
-            LogBus.i(TAG, "USB serial control dtr=${json.opt("dtr")} rts=${json.opt("rts")}")
+            LogBus.i(TAG, "USB serial control $path dtr=${json.opt("dtr")} rts=${json.opt("rts")}")
         } catch (error: Throwable) {
-            LogBus.w(TAG, "Invalid serial control frame: ${error.message}")
+            LogBus.w(TAG, "Invalid serial control frame for $path: ${error.message}")
         }
     }
 
@@ -267,16 +303,95 @@ object AndroidUsbSerialBridge {
         output.flush()
     }
 
+    private fun discoverPorts(context: Context): List<SerialPortCandidate> {
+        val manager = context.applicationContext.getSystemService(Context.USB_SERVICE) as UsbManager
+        val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager)
+        return drivers.flatMap { driver ->
+            driver.ports.mapIndexed { portNum, port ->
+                val device = driver.device
+                val virtualIndex = virtualIndexFor(device, portNum)
+                val session = sessions[virtualIndex]
+                val bridgePort = BASE_BRIDGE_PORT + virtualIndex
+                SerialPortCandidate(
+                    driver = driver,
+                    port = port,
+                    device = AndroidSerialDevice(
+                        deviceId = device.deviceId,
+                        vendorId = device.vendorId,
+                        productId = device.productId,
+                        portNum = portNum,
+                        virtualIndex = virtualIndex,
+                        bridgePort = bridgePort,
+                        path = "/opt/tx5dr-data/android-dev/ttyUSB$virtualIndex",
+                        name = buildString {
+                            append(device.productName ?: device.deviceName ?: "USB Serial")
+                            append(" #$portNum")
+                        },
+                        granted = manager.hasPermission(device),
+                        active = session?.isAlive == true,
+                        connected = session?.connected == true,
+                        error = portErrors[virtualIndex],
+                    ),
+                )
+            }
+        }.sortedBy { it.device.virtualIndex }
+    }
+
+    private fun virtualIndexFor(device: UsbDevice, portNum: Int): Int {
+        val key = "${device.deviceName}:${device.vendorId}:${device.productId}:$portNum"
+        return deviceIndexByKey.getOrPut(key) { nextVirtualIndex++ }
+    }
+
+    private fun stopStaleSessions(devices: List<AndroidSerialDevice>) {
+        val activeIndexes = devices.map { it.virtualIndex }.toSet()
+        val stale = sessions.filterKeys { it !in activeIndexes }.values.toList()
+        stale.forEach { session ->
+            sessions.remove(session.device.virtualIndex)
+            session.stop()
+            portErrors.remove(session.device.virtualIndex)
+        }
+    }
+
+    @Synchronized
+    private fun updateFromCurrentDevices(preferredState: String?, preferredError: String?) {
+        val context = app ?: return
+        val target = devicesFile ?: BridgeRuntime.paths.androidSerialDevicesFile
+        updateFromDevices(target, discoverPorts(context).map { it.device }, preferredState, preferredError)
+    }
+
+    @Synchronized
+    private fun updateFromDevices(target: File, devices: List<AndroidSerialDevice>, preferredState: String?, preferredError: String?) {
+        val mappedCount = devices.count { it.active }
+        val connectedCount = devices.count { it.connected }
+        val ungrantedCount = devices.count { !it.granted }
+        val error = preferredError ?: devices.firstOrNull { it.error != null }?.error
+        val state = preferredState ?: when {
+            devices.isEmpty() -> "no-device"
+            connectedCount > 0 -> "connected"
+            mappedCount > 0 -> "waiting-helper"
+            devices.any { it.deviceId in deniedDeviceIds } -> "permission-denied"
+            ungrantedCount > 0 -> "permission-required"
+            error != null -> "error"
+            wanted -> "starting"
+            else -> "stopped"
+        }
+        writeDevicesFile(target, devices, bridgeRunning = mappedCount > 0)
+        update(status.copy(
+            state = state,
+            devices = devices,
+            activePath = devices.firstOrNull { it.active }?.path,
+            mappedCount = mappedCount,
+            error = error,
+        ))
+    }
+
     private fun writeDevicesFile(target: File, devices: List<AndroidSerialDevice>, bridgeRunning: Boolean) {
         val root = JSONObject()
             .put("updatedAt", System.currentTimeMillis())
-            .put("bridgePort", BRIDGE_PORT)
+            .put("bridgePort", BASE_BRIDGE_PORT)
             .put("running", bridgeRunning)
         val arr = JSONArray()
-        // The current PoC opens one Android USB serial port and one PTY helper.
-        // Keep extra discovered ports visible in the Android UI, but do not
-        // advertise unbacked ttyUSB paths to Hamlib yet.
-        devices.take(1).forEach { d ->
+        devices.forEach { d ->
             arr.put(JSONObject()
                 .put("path", d.path)
                 .put("manufacturer", "Android USB Host")
@@ -286,7 +401,11 @@ object AndroidUsbSerialBridge {
                 .put("productId", d.productId.toString(16).padStart(4, '0'))
                 .put("vendorId", d.vendorId.toString(16).padStart(4, '0'))
                 .put("name", d.name)
-                .put("granted", d.granted))
+                .put("granted", d.granted)
+                .put("active", d.active)
+                .put("connected", d.connected)
+                .put("bridgePort", d.bridgePort)
+                .put("error", d.error ?: JSONObject.NULL))
         }
         root.put("ports", arr)
         try {
@@ -312,7 +431,37 @@ object AndroidUsbSerialBridge {
         listeners.forEach { listener ->
             runCatching { listener(next) }.onFailure { Log.w(TAG, "USB serial listener failed", it) }
         }
-        LogBus.i(TAG, "USB serial state=${next.state}, devices=${next.devices.size}, active=${next.activePath ?: "--"}${next.error?.let { ", error=$it" } ?: ""}")
+        LogBus.i(TAG, "USB serial state=${next.state}, devices=${next.devices.size}, mapped=${next.mappedCount}, active=${next.activePath ?: "--"}${next.error?.let { ", error=$it" } ?: ""}")
+    }
+
+    private data class SerialPortCandidate(
+        val driver: UsbSerialDriver,
+        val port: UsbSerialPort,
+        val device: AndroidSerialDevice,
+    )
+
+    private class SerialSession(
+        val device: AndroidSerialDevice,
+        val port: UsbSerialPort,
+        val connection: UsbDeviceConnection,
+    ) {
+        @Volatile var running = true
+        @Volatile var connected = false
+        @Volatile var serverSocket: ServerSocket? = null
+        @Volatile var clientSocket: Socket? = null
+        @Volatile var serverThread: Thread? = null
+        @Volatile var readThread: Thread? = null
+        val isAlive: Boolean get() = running && serverThread?.isAlive == true
+
+        fun stop() {
+            running = false
+            try { clientSocket?.close() } catch (_: Throwable) {}
+            try { serverSocket?.close() } catch (_: Throwable) {}
+            try { port.close() } catch (_: Throwable) {}
+            try { connection.close() } catch (_: Throwable) {}
+            if (Thread.currentThread() != readThread) readThread?.join(500)
+            if (Thread.currentThread() != serverThread) serverThread?.join(1500)
+        }
     }
 }
 
@@ -321,14 +470,20 @@ data class AndroidSerialDevice(
     val vendorId: Int,
     val productId: Int,
     val portNum: Int,
+    val virtualIndex: Int,
+    val bridgePort: Int,
     val path: String,
     val name: String,
     val granted: Boolean,
+    val active: Boolean = false,
+    val connected: Boolean = false,
+    val error: String? = null,
 )
 
 data class UsbSerialStatus(
     val state: String = "stopped",
     val devices: List<AndroidSerialDevice> = emptyList(),
     val activePath: String? = null,
+    val mappedCount: Int = 0,
     val error: String? = null,
 )

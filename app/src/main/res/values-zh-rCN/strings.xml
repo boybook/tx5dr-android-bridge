@@ -79,6 +79,9 @@
     <string name="phone_mic_notice">手机麦克风适合临时接收或测试，可能会受到环境噪声影响。</string>
     <string name="phone_speaker_notice">手机扬声器适合监听或测试；电台发射音频仍建议使用 USB 音频。</string>
     <string name="serial_auto_detect">连接电台 CAT 串口后自动检测</string>
+    <string name="serial_mapped_count">已映射 %1$d 个串口</string>
+    <string name="serial_bridge_port_format">桥接端口：%1$d</string>
+    <string name="copy_serial_path">复制串口路径</string>
     <string name="keep_alive_mode">值守模式</string>
     <string name="keep_alive_subtitle">息屏时保持后台服务运行</string>
     <string name="battery_optimization_settings">电池优化设置</string>

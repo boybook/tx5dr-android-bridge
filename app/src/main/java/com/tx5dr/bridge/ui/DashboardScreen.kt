@@ -279,6 +279,7 @@ fun DashboardScreen(
                     status = usbSerialStatus,
                     onDismiss = { detailSheet = null },
                     onStartSerial = onStartSerial,
+                    onCopyText = onCopyText,
                     onShowDiagnostics = {
                         detailSheet = null
                         onShowLogs()
@@ -688,7 +689,7 @@ private fun HardwareDock(
                     icon = Icons.Filled.Usb,
                     title = stringResource(R.string.usb_serial),
                     state = usbSerialState(serialStatus),
-                    supporting = serialStatus.activePath ?: serialStatus.devices.firstOrNull()?.name ?: stringResource(R.string.serial_auto_detect),
+                    supporting = serialSummary(serialStatus),
                     onClick = onSerialClick,
                 )
                 HorizontalDivider()
@@ -1213,20 +1214,51 @@ private fun SerialDetailSheet(
     status: UsbSerialStatus,
     onDismiss: () -> Unit,
     onStartSerial: () -> Unit,
+    onCopyText: (String) -> Unit,
     onShowDiagnostics: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(stringResource(R.string.usb_serial), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             StateChip(usbSerialState(status))
-            DeviceList(stringResource(R.string.devices), status.devices.map { it.name })
-            status.activePath?.let { Text(stringResource(R.string.path_format, it), fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            SerialDeviceList(status, onCopyText)
             status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onStartSerial) { Text(if (status.state == "connected") stringResource(R.string.serial_reconnect) else stringResource(R.string.authorize_start)) }
                 OutlinedButton(onClick = onShowDiagnostics) { Text(stringResource(R.string.related_logs)) }
             }
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun SerialDeviceList(status: UsbSerialStatus, onCopyText: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.devices), style = MaterialTheme.typography.labelLarge)
+        if (status.devices.isEmpty()) {
+            Text(stringResource(R.string.no_device_detected), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            status.devices.forEach { device ->
+                ListItem(
+                    headlineContent = { Text(device.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    supportingContent = {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(stringResource(R.string.path_format, device.path), fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(stringResource(R.string.serial_bridge_port_format, device.bridgePort), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                        }
+                    },
+                    trailingContent = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StateChip(serialDeviceState(device))
+                            IconButton(onClick = { onCopyText(device.path) }) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.copy_serial_path))
+                            }
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -1291,6 +1323,22 @@ private fun preferredOutputDevice(status: UsbAudioStatus): UsbAudioDevice? = whe
     AudioRoute.BUILTIN_SPEAKER -> status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
     else -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
         ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
+}
+
+@Composable
+private fun serialSummary(status: UsbSerialStatus): String = when {
+    status.mappedCount > 1 -> stringResource(R.string.serial_mapped_count, status.mappedCount)
+    status.activePath != null -> status.activePath
+    status.devices.isNotEmpty() -> status.devices.first().name
+    else -> stringResource(R.string.serial_auto_detect)
+}
+
+private fun serialDeviceState(device: com.tx5dr.bridge.AndroidSerialDevice): String = when {
+    !device.granted -> "permission-required"
+    device.error != null -> "error"
+    device.connected -> "connected"
+    device.active -> "waiting-helper"
+    else -> "stopped"
 }
 
 private fun usbSerialState(status: UsbSerialStatus): String = when {

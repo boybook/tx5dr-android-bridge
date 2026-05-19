@@ -33,7 +33,7 @@ object BridgeRuntime {
     private lateinit var prefs: SharedPreferences
     private var prootProcess: Process? = null
     private var audioBridgeProcess: Process? = null
-    private var serialPtyProcess: Process? = null
+    private val serialPtyProcesses = mutableMapOf<String, Process>()
     private var healthRunning = false
     private var status = BridgeStatus()
 
@@ -235,10 +235,8 @@ object BridgeRuntime {
                     runCatching {
                         AndroidUsbAudioBridge.refreshDevices(app)
                         AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
-                        if (action == UsbManager.ACTION_USB_DEVICE_DETACHED) {
-                            AndroidUsbSerialBridge.stop()
-                        }
                         if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
+                        startSerialPtyProcess()
                     }.onFailure { error ->
                         LogBus.e(TAG, "USB hotplug handling failed", error)
                     }
@@ -513,22 +511,33 @@ wait -n ${'$'}server_pid ${'$'}client_pid
     }
 
     private fun startSerialPtyProcess() {
-        if (serialPtyProcess?.isAlive == true) return
+        val serialDevices = AndroidUsbSerialBridge.snapshotStatus().devices
+            .filter { it.granted && it.active }
+            .sortedBy { it.virtualIndex }
+        val activePaths = serialDevices.map { it.path }.toSet()
+        serialPtyProcesses.filterKeys { it !in activePaths }.values.forEach { it.destroy() }
+        serialPtyProcesses.keys.removeAll { it !in activePaths }
+        if (serialDevices.isEmpty()) return
         ensureBaseRuntime()
         ensureHostRuntimeEnvironment()
-        val script = """
+        serialDevices.forEach { device ->
+            val existing = serialPtyProcesses[device.path]
+            if (existing?.isAlive == true) return@forEach
+            serialPtyProcesses.remove(device.path)
+            val script = """
 set -e
 mkdir -p /opt/tx5dr-data/android-dev /opt/tx5dr-data/logs
-exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
+exec tx5dr-android-serial-pty ${device.path} 127.0.0.1 ${device.bridgePort}
 """.trimIndent()
-        val process = newProotProcess(buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-lc", script))
-            .redirectErrorStream(true)
-            .start()
-        serialPtyProcess = process
-        pipeOutput(process, "serial-pty")
-        LogBus.i(TAG, "Started Linux serial PTY helper")
-        monitorAuxiliaryProcess("Linux serial PTY helper", process) {
-            if (serialPtyProcess == process) serialPtyProcess = null
+            val process = newProotProcess(buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-lc", script))
+                .redirectErrorStream(true)
+                .start()
+            serialPtyProcesses[device.path] = process
+            pipeOutput(process, "serial-pty-${device.virtualIndex}")
+            LogBus.i(TAG, "Started Linux serial PTY helper for ${device.path} on ${device.bridgePort}")
+            monitorAuxiliaryProcess("Linux serial PTY helper ${device.path}", process) {
+                if (serialPtyProcesses[device.path] == process) serialPtyProcesses.remove(device.path)
+            }
         }
     }
 
@@ -539,8 +548,9 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
     }
 
     private fun stopSerialPtyProcess() {
-        serialPtyProcess?.destroy()
-        serialPtyProcess = null
+        val processes = serialPtyProcesses.values.toList()
+        serialPtyProcesses.clear()
+        processes.forEach { it.destroy() }
     }
 
     private fun buildProotBaseCommand(): List<String> = listOf(
