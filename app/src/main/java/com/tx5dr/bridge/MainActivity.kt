@@ -2,6 +2,9 @@ package com.tx5dr.bridge
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -12,10 +15,15 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Settings
+import android.util.Base64
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -24,11 +32,15 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import com.tx5dr.bridge.ui.DashboardScreen
+import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private var bridgeStatus by mutableStateOf(BridgeStatus())
@@ -52,8 +64,43 @@ class MainActivity : ComponentActivity() {
     private lateinit var rootContainer: FrameLayout
     private var nativeWebView: WebView? = null
     private var webNotificationBridge: AndroidWebNotificationBridge? = null
+    private var pendingFilePathCallback: ValueCallback<Array<Uri>>? = null
+    private val webDownloadLock = Any()
+    private var activeWebDownload: PendingWebDownload? = null
+    private var pendingWebDownloadSave: PendingWebDownload? = null
     private var lastReleasePreviewUrl: String? = null
     private var lastReleasePreviewAtMs: Long = 0L
+    private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val callback = pendingFilePathCallback ?: return@registerForActivityResult
+        pendingFilePathCallback = null
+        val uris = if (result.resultCode == Activity.RESULT_OK) {
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        } else {
+            null
+        }
+        LogBus.i("WebView", "File chooser returned ${uris?.size ?: 0} file(s)")
+        callback.onReceiveValue(uris)
+    }
+    private val downloadSaveLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val download = pendingWebDownloadSave ?: return@registerForActivityResult
+        pendingWebDownloadSave = null
+        if (result.resultCode != Activity.RESULT_OK || result.data?.data == null) {
+            LogBus.i("WebView", "Download save cancelled: ${download.fileName}")
+            download.cleanup()
+            return@registerForActivityResult
+        }
+        val target = result.data?.data!!
+        runCatching {
+            contentResolver.openOutputStream(target)?.use { output ->
+                download.file.inputStream().use { input -> input.copyTo(output) }
+            } ?: error("Unable to open selected file for writing")
+        }.onSuccess {
+            LogBus.i("WebView", "Saved download ${download.fileName}: ${formatBytes(download.bytesWritten)}")
+        }.onFailure { error ->
+            LogBus.w("WebView", "Failed to save download ${download.fileName}: ${error.message}")
+        }
+        download.cleanup()
+    }
 
     private val statusListener: (BridgeStatus) -> Unit = { status ->
         runOnUiThread {
@@ -240,19 +287,13 @@ class MainActivity : ComponentActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             configureWebViewTheme(settings)
             addJavascriptInterface(WebChromeBridge(), WEB_CHROME_BRIDGE)
+            addJavascriptInterface(WebDownloadBridge(), WEB_DOWNLOAD_BRIDGE)
             val notificationBridge = AndroidWebNotificationBridge(this@MainActivity, this, url)
             webNotificationBridge = notificationBridge
             addJavascriptInterface(notificationBridge, WEB_NOTIFICATION_BRIDGE)
-            if (BuildConfig.DEBUG) {
-                webChromeClient = object : WebChromeClient() {
-                    override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
-                        LogBus.i(
-                            "WebView",
-                            "${consoleMessage.messageLevel()} ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()} ${consoleMessage.message()}"
-                        )
-                        return true
-                    }
-                }
+            webChromeClient = createWebChromeClient()
+            setDownloadListener { downloadUrl, userAgent, contentDisposition, mimeType, contentLength ->
+                handleWebViewDownload(downloadUrl, userAgent, contentDisposition, mimeType, contentLength)
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
@@ -271,12 +312,14 @@ class MainActivity : ComponentActivity() {
                 override fun onPageCommitVisible(view: WebView, url: String) {
                     notificationBridge.updateUrl(url)
                     installWebChromeProbe(view)
+                    installWebDownloadBridge(view)
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
                     notificationBridge.updateUrl(url)
                     LogBus.i("WebView", "Page finished: ${url.substringBefore('?')}")
                     installWebChromeProbe(view)
+                    installWebDownloadBridge(view)
                 }
 
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
@@ -290,6 +333,52 @@ class MainActivity : ComponentActivity() {
         applyWebStatusBarFallback()
         rootContainer.addView(webView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         nativeWebView = webView
+    }
+
+    private fun createWebChromeClient(): WebChromeClient = object : WebChromeClient() {
+        override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+            if (BuildConfig.DEBUG) {
+                LogBus.i(
+                    "WebView",
+                    "${consoleMessage.messageLevel()} ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()} ${consoleMessage.message()}"
+                )
+            }
+            return BuildConfig.DEBUG
+        }
+
+        override fun onShowFileChooser(
+            webView: WebView?,
+            filePathCallback: ValueCallback<Array<Uri>>,
+            fileChooserParams: FileChooserParams,
+        ): Boolean {
+            pendingFilePathCallback?.onReceiveValue(null)
+            pendingFilePathCallback = filePathCallback
+            val intent = runCatching { fileChooserParams.createIntent() }
+                .getOrElse { error ->
+                    LogBus.w("WebView", "Failed to create file chooser intent: ${error.message}")
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                    }
+                }
+                .apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            return try {
+                fileChooserLauncher.launch(intent)
+                true
+            } catch (error: ActivityNotFoundException) {
+                LogBus.w("WebView", "No Android file picker available: ${error.message}")
+                pendingFilePathCallback = null
+                filePathCallback.onReceiveValue(null)
+                true
+            } catch (error: RuntimeException) {
+                LogBus.w("WebView", "Unable to open Android file picker: ${error.message}")
+                pendingFilePathCallback = null
+                filePathCallback.onReceiveValue(null)
+                true
+            }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -366,6 +455,109 @@ class MainActivity : ComponentActivity() {
         webView.evaluateJavascript(js, null)
     }
 
+    private fun installWebDownloadBridge(webView: WebView) {
+        val js = """
+            (function() {
+              if (window.__tx5drAndroidDownloadBridgeInstalled) return;
+              window.__tx5drAndroidDownloadBridgeInstalled = true;
+              const bridge = window.$WEB_DOWNLOAD_BRIDGE;
+              if (!bridge) return;
+              const maxBytes = $MAX_WEB_DOWNLOAD_BYTES;
+              const chunkBytes = 512 * 1024;
+              function fallbackName(name) {
+                return (name && String(name).trim()) || 'tx5dr-download';
+              }
+              function readSliceAsBase64(slice) {
+                return new Promise(function(resolve, reject) {
+                  const reader = new FileReader();
+                  reader.onerror = function() { reject(reader.error || new Error('read failed')); };
+                  reader.onload = function() {
+                    const result = String(reader.result || '');
+                    const comma = result.indexOf(',');
+                    resolve(comma >= 0 ? result.slice(comma + 1) : result);
+                  };
+                  reader.readAsDataURL(slice);
+                });
+              }
+              async function saveBlob(fileName, blob) {
+                if (!blob) throw new Error('empty blob');
+                if (blob.size > maxBytes) throw new Error('download too large: ' + blob.size);
+                const mimeType = blob.type || 'application/octet-stream';
+                const id = bridge.beginDownload(fallbackName(fileName), mimeType, String(blob.size));
+                if (!id) throw new Error('native download rejected');
+                try {
+                  for (let offset = 0; offset < blob.size; offset += chunkBytes) {
+                    const base64 = await readSliceAsBase64(blob.slice(offset, Math.min(offset + chunkBytes, blob.size)));
+                    if (!bridge.appendDownloadChunk(id, base64)) throw new Error('native chunk rejected');
+                  }
+                  if (!bridge.finishDownload(id)) throw new Error('native download finish rejected');
+                } catch (error) {
+                  try { bridge.cancelDownload(id); } catch (_) {}
+                  throw error;
+                }
+              }
+              document.addEventListener('click', function(event) {
+                const anchor = event.target && event.target.closest ? event.target.closest('a[download]') : null;
+                if (!anchor) return;
+                const href = anchor.href || '';
+                if (!href.startsWith('blob:') && !href.startsWith('data:')) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                (async function() {
+                  try {
+                    const response = await fetch(href);
+                    const blob = await response.blob();
+                    await saveBlob(anchor.getAttribute('download'), blob);
+                  } catch (error) {
+                    console.error('[TX-5DR Android] download bridge failed', error);
+                  }
+                })();
+              }, true);
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
+    private fun handleWebViewDownload(
+        url: String?,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?,
+        contentLength: Long,
+    ) {
+        val value = url?.takeIf { it.isNotBlank() } ?: return
+        if (value.startsWith("blob:") || value.startsWith("data:")) {
+            LogBus.w("WebView", "Ignoring ${value.substringBefore(':')} download listener event; JS bridge should handle it")
+            return
+        }
+        val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return
+        if (uri.scheme != "http" && uri.scheme != "https") {
+            LogBus.w("WebView", "Unsupported download URL: $value")
+            return
+        }
+        val fileName = sanitizeFileName(URLUtil.guessFileName(value, contentDisposition, mimeType))
+        val request = DownloadManager.Request(uri)
+            .setTitle(fileName)
+            .setDescription("TX-5DR")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setAllowedOverMetered(true)
+            .setAllowedOverRoaming(true)
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+        if (!mimeType.isNullOrBlank()) request.setMimeType(mimeType)
+        if (!userAgent.isNullOrBlank()) request.addRequestHeader("User-Agent", userAgent)
+        CookieManager.getInstance().getCookie(value)?.takeIf { it.isNotBlank() }?.let { cookie ->
+            request.addRequestHeader("Cookie", cookie)
+        }
+        runCatching {
+            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            manager.enqueue(request)
+        }.onSuccess {
+            LogBus.i("WebView", "Queued HTTP download $fileName (${formatBytes(contentLength)})")
+        }.onFailure { error ->
+            LogBus.w("WebView", "Failed to queue HTTP download $fileName: ${error.message}")
+        }
+    }
+
     private inner class WebChromeBridge {
         @JavascriptInterface
         fun setStatusBarColor(cssColor: String?) {
@@ -384,6 +576,189 @@ class MainActivity : ComponentActivity() {
                 if (webVisible) applyNavigationBarColor(color)
             }
         }
+    }
+
+    private inner class WebDownloadBridge {
+        @JavascriptInterface
+        fun beginDownload(fileName: String?, mimeType: String?, totalBytes: String?): String {
+            val expectedBytes = totalBytes?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
+            if (expectedBytes > MAX_WEB_DOWNLOAD_BYTES) {
+                LogBus.w("WebView", "Download too large: ${formatBytes(expectedBytes)}")
+                return ""
+            }
+            return synchronized(webDownloadLock) {
+                if (pendingWebDownloadSave != null) {
+                    LogBus.w("WebView", "Another download is waiting for a save location")
+                    return@synchronized ""
+                }
+                activeWebDownload?.cleanup()
+                val download = createPendingWebDownload(fileName, mimeType)
+                activeWebDownload = download
+                LogBus.i("WebView", "Receiving download ${download.fileName} (${formatBytes(expectedBytes)})")
+                download.id
+            }
+        }
+
+        @JavascriptInterface
+        fun appendDownloadChunk(id: String?, base64Payload: String?): Boolean {
+            val chunk = stripDataUrlPrefix(base64Payload)
+            if (id.isNullOrBlank() || chunk.isBlank()) return false
+            return synchronized(webDownloadLock) {
+                val download = activeWebDownload?.takeIf { it.id == id } ?: return@synchronized false
+                val decodedSize = estimateBase64DecodedBytes(chunk)
+                if (download.bytesWritten + decodedSize > MAX_WEB_DOWNLOAD_BYTES) {
+                    LogBus.w("WebView", "Download exceeded ${formatBytes(MAX_WEB_DOWNLOAD_BYTES)}: ${download.fileName}")
+                    download.cleanup()
+                    activeWebDownload = null
+                    return@synchronized false
+                }
+                runCatching {
+                    val bytes = Base64.decode(chunk, Base64.DEFAULT)
+                    download.write(bytes)
+                }.onFailure { error ->
+                    LogBus.w("WebView", "Failed to append download chunk: ${error.message}")
+                    download.cleanup()
+                    activeWebDownload = null
+                }.isSuccess
+            }
+        }
+
+        @JavascriptInterface
+        fun finishDownload(id: String?): Boolean {
+            if (id.isNullOrBlank()) return false
+            val download = synchronized(webDownloadLock) {
+                val current = activeWebDownload?.takeIf { it.id == id } ?: return@synchronized null
+                activeWebDownload = null
+                current.finish()
+                current
+            } ?: return false
+            launchWebDownloadSave(download)
+            return true
+        }
+
+        @JavascriptInterface
+        fun cancelDownload(id: String?) {
+            synchronized(webDownloadLock) {
+                val download = activeWebDownload?.takeIf { it.id == id } ?: return@synchronized
+                activeWebDownload = null
+                download.cleanup()
+                LogBus.i("WebView", "Cancelled download ${download.fileName}")
+            }
+        }
+
+        @JavascriptInterface
+        fun saveBase64Download(fileName: String?, mimeType: String?, base64Payload: String?): Boolean {
+            val chunk = stripDataUrlPrefix(base64Payload)
+            if (chunk.isBlank()) return false
+            if (estimateBase64DecodedBytes(chunk) > MAX_WEB_DOWNLOAD_BYTES) {
+                LogBus.w("WebView", "Download too large for single-shot save")
+                return false
+            }
+            val download = synchronized(webDownloadLock) {
+                if (pendingWebDownloadSave != null) return@synchronized null
+                activeWebDownload?.cleanup()
+                activeWebDownload = null
+                createPendingWebDownload(fileName, mimeType)
+            } ?: return false
+            return runCatching {
+                download.write(Base64.decode(chunk, Base64.DEFAULT))
+                download.finish()
+                launchWebDownloadSave(download)
+            }.onFailure { error ->
+                LogBus.w("WebView", "Failed to receive download: ${error.message}")
+                download.cleanup()
+            }.isSuccess
+        }
+    }
+
+    private data class PendingWebDownload(
+        val id: String,
+        val fileName: String,
+        val mimeType: String,
+        val file: File,
+        private val output: FileOutputStream,
+        var bytesWritten: Long = 0L,
+    ) {
+        fun write(bytes: ByteArray) {
+            output.write(bytes)
+            bytesWritten += bytes.size
+        }
+
+        fun finish() {
+            output.flush()
+            output.close()
+        }
+
+        fun cleanup() {
+            runCatching { output.close() }
+            runCatching { file.delete() }
+        }
+    }
+
+    private fun createPendingWebDownload(fileName: String?, mimeType: String?): PendingWebDownload {
+        val safeName = sanitizeFileName(fileName)
+        val dir = File(cacheDir, "web-downloads").apply { mkdirs() }
+        val file = File(dir, "${UUID.randomUUID()}-$safeName")
+        return PendingWebDownload(
+            id = UUID.randomUUID().toString(),
+            fileName = safeName,
+            mimeType = mimeType?.takeIf { it.isNotBlank() } ?: "application/octet-stream",
+            file = file,
+            output = FileOutputStream(file),
+        )
+    }
+
+    private fun launchWebDownloadSave(download: PendingWebDownload) {
+        runOnUiThread {
+            pendingWebDownloadSave?.cleanup()
+            pendingWebDownloadSave = download
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = download.mimeType
+                putExtra(Intent.EXTRA_TITLE, download.fileName)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+            try {
+                downloadSaveLauncher.launch(intent)
+            } catch (error: RuntimeException) {
+                LogBus.w("WebView", "Unable to open save picker: ${error.message}")
+                pendingWebDownloadSave = null
+                download.cleanup()
+            }
+        }
+    }
+
+    private fun stripDataUrlPrefix(value: String?): String {
+        val text = value?.trim().orEmpty()
+        val comma = text.indexOf(',')
+        return if (text.startsWith("data:", ignoreCase = true) && comma >= 0) text.substring(comma + 1) else text
+    }
+
+    private fun estimateBase64DecodedBytes(base64: String): Long {
+        val cleanLength = base64.count { !it.isWhitespace() }
+        val padding = base64.takeLast(2).count { it == '=' }
+        return ((cleanLength * 3L) / 4L - padding).coerceAtLeast(0L)
+    }
+
+    private fun sanitizeFileName(value: String?): String {
+        val raw = value?.trim().takeUnless { it.isNullOrBlank() } ?: "tx5dr-download"
+        val sanitized = raw.map { ch ->
+            if (ch.code < 32 || ch == '\\' || ch == '/' || ch == ':' || ch == '*' || ch == '?' || ch == '"' || ch == '<' || ch == '>' || ch == '|') '_' else ch
+        }.joinToString("").trim().take(160)
+        return sanitized.ifBlank { "tx5dr-download" }
+    }
+
+    private fun formatBytes(value: Long): String {
+        if (value < 0) return "unknown size"
+        if (value < 1024) return "$value B"
+        val units = arrayOf("KB", "MB", "GB")
+        var size = value.toDouble() / 1024.0
+        var unit = 0
+        while (size >= 1024.0 && unit < units.lastIndex) {
+            size /= 1024.0
+            unit++
+        }
+        return String.format(java.util.Locale.US, "%.1f %s", size, units[unit])
     }
 
     private fun applyWebStatusBarFallback() {
@@ -448,6 +823,14 @@ class MainActivity : ComponentActivity() {
         (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
     private fun destroyNativeWebView() {
+        pendingFilePathCallback?.onReceiveValue(null)
+        pendingFilePathCallback = null
+        synchronized(webDownloadLock) {
+            activeWebDownload?.cleanup()
+            activeWebDownload = null
+            pendingWebDownloadSave?.cleanup()
+            pendingWebDownloadSave = null
+        }
         webNotificationBridge = null
         nativeWebView?.let { view ->
             runCatching { rootContainer.removeView(view) }
@@ -593,8 +976,10 @@ class MainActivity : ComponentActivity() {
         private const val WEB_PORT = 8076
         private const val WEB_URL = "http://127.0.0.1:8076"
         private const val WEB_CHROME_BRIDGE = "Tx5drAndroidChrome"
+        private const val WEB_DOWNLOAD_BRIDGE = "Tx5drAndroidDownloads"
         private const val WEB_NOTIFICATION_BRIDGE = "Tx5drAndroidNotifications"
         const val ACTION_OPEN_WEBVIEW = "com.tx5dr.bridge.OPEN_WEBVIEW"
+        private const val MAX_WEB_DOWNLOAD_BYTES = 128L * 1024L * 1024L
         private const val RELEASE_PREVIEW_MIN_INTERVAL_MS = 10 * 60 * 1000L
     }
 }
