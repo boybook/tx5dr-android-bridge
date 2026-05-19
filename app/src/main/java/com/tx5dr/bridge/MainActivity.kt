@@ -225,8 +225,8 @@ class MainActivity : ComponentActivity() {
         refreshExternalDataStatus()
         AndroidUsbAudioBridge.refreshDevices(this)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
-        if (AndroidUsbAudioBridge.hasRecordPermission(this) && BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
-            AndroidUsbAudioBridge.startIfPermitted(this)
+        if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
+            BridgeRuntime.startBridges()
         }
         checkRemoteVersion()
     }

@@ -103,6 +103,11 @@ object AndroidUsbSerialBridge {
     }
 
     @Synchronized
+    fun startAuto(context: Context? = null, targetFile: File? = null): Boolean {
+        return startInternal(context, targetFile, requestPermissions = true, resetDenied = false)
+    }
+
+    @Synchronized
     fun startIfPermitted(context: Context? = null, targetFile: File? = null): Boolean {
         return startInternal(context, targetFile, requestPermissions = false, resetDenied = false)
     }

@@ -213,7 +213,7 @@ object BridgeRuntime {
 
     private fun startBridgesInternal() {
         AndroidUsbAudioBridge.startIfPermitted(app)
-        val serialStarted = AndroidUsbSerialBridge.startIfPermitted(app, paths.androidSerialDevicesFile)
+        val serialStarted = AndroidUsbSerialBridge.startAuto(app, paths.androidSerialDevicesFile)
         if (serialStarted) startSerialPtyProcess()
         LogBus.i(TAG, "Bridge bootstrap complete")
     }
