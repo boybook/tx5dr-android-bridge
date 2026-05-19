@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private var micWanted = false
     private lateinit var rootContainer: FrameLayout
     private var nativeWebView: WebView? = null
+    private var webNotificationBridge: AndroidWebNotificationBridge? = null
     private var lastReleasePreviewUrl: String? = null
     private var lastReleasePreviewAtMs: Long = 0L
 
@@ -135,8 +136,8 @@ class MainActivity : ComponentActivity() {
         AndroidUsbSerialBridge.addListener(usbSerialListener)
         AndroidUsbAudioBridge.refreshDevices(this)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
-        requestNotificationPermissionIfNeeded()
         BridgeService.start(this, BridgeService.ACTION_BOOTSTRAP)
+        handleLaunchIntent(intent)
         LogBus.i("Tx5drBridge", "MainActivity created")
     }
 
@@ -150,6 +151,12 @@ class MainActivity : ComponentActivity() {
             AndroidUsbAudioBridge.startIfPermitted(this)
         }
         checkRemoteVersion()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
     }
 
     override fun onDestroy() {
@@ -229,6 +236,9 @@ class MainActivity : ComponentActivity() {
             settings.mediaPlaybackRequiresUserGesture = false
             configureWebViewTheme(settings)
             addJavascriptInterface(WebChromeBridge(), WEB_CHROME_BRIDGE)
+            val notificationBridge = AndroidWebNotificationBridge(this@MainActivity, this)
+            webNotificationBridge = notificationBridge
+            addJavascriptInterface(notificationBridge, WEB_NOTIFICATION_BRIDGE)
             if (BuildConfig.DEBUG) {
                 webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
@@ -428,6 +438,7 @@ class MainActivity : ComponentActivity() {
         (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
     private fun destroyNativeWebView() {
+        webNotificationBridge = null
         nativeWebView?.let { view ->
             runCatching { rootContainer.removeView(view) }
             runCatching { view.stopLoading() }
@@ -521,14 +532,12 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_POST_NOTIFICATIONS)
-        }
-    }
-
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_POST_NOTIFICATIONS) {
+            webNotificationBridge?.onPermissionResult()
+            return
+        }
         if (requestCode == REQ_RECORD_AUDIO && micWanted) {
             micWanted = false
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
@@ -540,6 +549,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun handleLaunchIntent(intent: Intent?) {
+        if (intent?.action == ACTION_OPEN_WEBVIEW) {
+            webSuppressedForSession = false
+            openWebView()
+        }
+    }
+
     private fun copyToClipboard(value: String) {
         val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         manager.setPrimaryClip(ClipData.newPlainText("TX-5DR", value))
@@ -548,10 +564,12 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val REQ_RECORD_AUDIO = 1001
-        private const val REQ_POST_NOTIFICATIONS = 1002
+        const val REQ_POST_NOTIFICATIONS = 1002
         private const val WEB_PORT = 8076
         private const val WEB_URL = "http://127.0.0.1:8076"
         private const val WEB_CHROME_BRIDGE = "Tx5drAndroidChrome"
+        private const val WEB_NOTIFICATION_BRIDGE = "Tx5drAndroidNotifications"
+        const val ACTION_OPEN_WEBVIEW = "com.tx5dr.bridge.OPEN_WEBVIEW"
         private const val RELEASE_PREVIEW_MIN_INTERVAL_MS = 10 * 60 * 1000L
     }
 }

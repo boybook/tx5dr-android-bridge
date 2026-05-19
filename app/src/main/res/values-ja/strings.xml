@@ -4,6 +4,8 @@
     <string name="notification_keep_alive">常駐中</string>
     <string name="notification_action_open">開く</string>
     <string name="notification_action_stop">停止</string>
+    <string name="notification_events_channel_name">システムイベント</string>
+    <string name="notification_events_channel_description">QSO と無線機イベントの通知</string>
 
     <string name="runtime_needs_attention">対応が必要です</string>
     <string name="runtime_service_running">サービス実行中</string>

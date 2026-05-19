@@ -4,6 +4,8 @@
     <string name="notification_keep_alive">Keep-alive</string>
     <string name="notification_action_open">Open</string>
     <string name="notification_action_stop">Stop</string>
+    <string name="notification_events_channel_name">System events</string>
+    <string name="notification_events_channel_description">QSO and radio event notifications</string>
 
     <string name="runtime_needs_attention">Needs attention</string>
     <string name="runtime_service_running">Service running</string>

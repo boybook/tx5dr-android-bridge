@@ -4,6 +4,8 @@
     <string name="notification_keep_alive">值守中</string>
     <string name="notification_action_open">打开</string>
     <string name="notification_action_stop">停止</string>
+    <string name="notification_events_channel_name">系统事件</string>
+    <string name="notification_events_channel_description">QSO 和电台事件提醒</string>
 
     <string name="runtime_needs_attention">需要处理</string>
     <string name="runtime_service_running">服务运行中</string>
