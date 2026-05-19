@@ -45,7 +45,7 @@ object BridgeRuntime {
         prefs = app.getSharedPreferences("bridge", Context.MODE_PRIVATE)
         paths = RuntimePaths(app.filesDir, File(app.applicationInfo.nativeLibraryDir))
         paths.ensureDirs()
-        NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile)
+        NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile, paths.resolvConfFile)
         AndroidUsbAudioBridge.startWatchingDevices(app)
         AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
         registerUsbHotplugReceiver()
@@ -123,7 +123,7 @@ object BridgeRuntime {
     }
 
     fun refreshNetworkAccess(): NetworkAccessProvider.Snapshot {
-        return NetworkAccessProvider.writeSnapshot(app, paths.androidNetworkAccessFile)
+        return NetworkAccessProvider.writeSnapshot(app, paths.androidNetworkAccessFile, paths.resolvConfFile)
     }
 
     fun installOrUpdate() {
@@ -543,6 +543,7 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
         "--pwd=/",
         "--bind=${paths.dataDir.absolutePath}:/opt/tx5dr-data",
         "--bind=${paths.txDir.absolutePath}:/opt/tx5dr",
+        "--bind=${paths.resolvConfFile.absolutePath}:/etc/resolv.conf",
         "--bind=/proc:/proc",
         "--bind=/dev:/dev",
         "--bind=/sys:/sys",
@@ -846,6 +847,7 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
         val dataDir = File(workDir, "tx5dr-data")
         val androidNetworkAccessFile = File(dataDir, "runtime/android-network-access.json")
         val androidSerialDevicesFile = File(dataDir, "runtime/android-serial-devices.json")
+        val resolvConfFile = File(dataDir, "runtime/resolv.conf")
         val txDir = File(workDir, "tx5dr")
         val releasesDir = File(txDir, "releases")
         val currentLink = File(txDir, "current")
@@ -858,6 +860,7 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
         val rootfsReady = File(rootfsDir, ".tx5dr-rootfs-ready")
         fun ensureDirs() {
             listOf(workDir, cacheDir, hostLibDir, prootTmpDir, rootfsDir, dataDir, releasesDir).forEach { it.mkdirs() }
+            androidNetworkAccessFile.parentFile?.mkdirs()
         }
     }
 

@@ -27,6 +27,7 @@ Commands:
   stop-usb-audio          Stop Android USB audio bridge
   start-usb-serial        Start Android USB serial bridge and Linux PTY helper
   stop-usb-serial         Stop Android USB serial bridge and Linux PTY helper
+  dns-smoke               Check PRoot /etc/resolv.conf, DNS lookup, and HTTPS reachability
   audio-smoke [seconds]   Record TX5DRAndroidUsbInput inside PRoot and print byte/nonzero stats
   output-smoke [seconds]  Play a 48kHz mono tone into TX5DRAndroidOutput and print recent output stats
   start-mic               Alias for start-usb-audio
@@ -65,11 +66,17 @@ export LD_LIBRARY_PATH="/data/user/0/$PKG/files/runtime/host-libs:\$NATIVE"
 export PROOT_LOADER="\$NATIVE/libproot_loader.so"
 export PROOT_LOADER_32="\$NATIVE/libproot_loader32.so"
 export PROOT_TMP_DIR="/data/user/0/$PKG/files/runtime/proot-tmp"
+RESOLV="/data/user/0/$PKG/files/runtime/tx5dr-data/runtime/resolv.conf"
+mkdir -p "\$(dirname "\$RESOLV")"
+if [ ! -s "\$RESOLV" ]; then
+  printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 1.1.1.1\noptions timeout:2 attempts:2\n' > "\$RESOLV"
+fi
 "\$NATIVE/libproot_exec.so" \\
   --rootfs=/data/user/0/$PKG/files/runtime/rootfs \\
   --pwd=/ \\
   --bind=/data/user/0/$PKG/files/runtime/tx5dr-data:/opt/tx5dr-data \\
   --bind=/data/user/0/$PKG/files/runtime/tx5dr:/opt/tx5dr \\
+  --bind=/data/user/0/$PKG/files/runtime/tx5dr-data/runtime/resolv.conf:/etc/resolv.conf \\
   --bind=/proc:/proc \\
   --bind=/dev:/dev \\
   --bind=/sys:/sys \\
@@ -128,6 +135,30 @@ case "${1:-}" in
     ;;
   stop-usb-serial)
     run_debug_action com.tx5dr.bridge.debug.STOP_USB_SERIAL
+    ;;
+  dns-smoke)
+    tmp_inner="$(mktemp)"
+    cat > "$tmp_inner" <<'INNER'
+#!/bin/bash
+set -e
+echo RESOLV
+cat /etc/resolv.conf
+echo DNS_SERVERS
+node -e 'const dns=require("node:dns"); console.log(dns.getServers())'
+echo LOOKUP_DL
+node -e 'require("node:dns").lookup("dl.tx5dr.com",(e,a,f)=>{ if(e) { console.error(e); process.exit(1); } console.log(a,f); })'
+echo LOOKUP_NTP
+node -e 'require("node:dns").lookup("0.pool.ntp.org",(e,a,f)=>{ if(e) { console.error(e); process.exit(1); } console.log(a,f); })'
+echo HTTPS
+curl -4 -m 8 -I https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json | head -20
+INNER
+    "$ADB" push "$tmp_inner" /data/local/tmp/tx5dr-dns-smoke-inner.sh >/dev/null
+    "$ADB" shell "run-as $PKG sh -c 'mkdir -p files/runtime/tx5dr-data/runtime && cat /data/local/tmp/tx5dr-dns-smoke-inner.sh > files/runtime/tx5dr-data/runtime/dns-smoke-inner.sh && chmod 700 files/runtime/tx5dr-data/runtime/dns-smoke-inner.sh'"
+    rm -f "$tmp_inner"
+    tmp_script="$(mktemp)"
+    make_proot_script "/bin/bash /opt/tx5dr-data/runtime/dns-smoke-inner.sh" "$tmp_script"
+    write_and_run_proot_script "$tmp_script"
+    rm -f "$tmp_script"
     ;;
   audio-smoke)
     seconds="${2:-3}"

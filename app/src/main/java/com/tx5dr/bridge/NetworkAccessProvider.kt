@@ -10,6 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.NetworkInterface
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
@@ -22,8 +23,11 @@ object NetworkAccessProvider {
     private const val DEFAULT_WEB_PORT = 8076
     private const val POLL_INTERVAL_SECONDS = 5L
     private var watching = false
+    private val FALLBACK_DNS_SERVERS = listOf("223.5.5.5", "119.29.29.29", "1.1.1.1")
     private var lastLoggedSummary: String? = null
+    private var lastLoggedDnsSummary: String? = null
     private var lastSnapshotFingerprint: String? = null
+    private var lastDnsFingerprint: String? = null
     private val poller: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Tx5drNetworkAccessPoll").apply { isDaemon = true }
     }
@@ -33,6 +37,7 @@ object NetworkAccessProvider {
         val addresses: List<String>,
         val urls: List<String>,
         val updatedAt: Long,
+        val dnsServers: List<String> = emptyList(),
     )
 
     private data class AddressCandidate(
@@ -50,24 +55,24 @@ object NetworkAccessProvider {
         listeners.remove(listener)
     }
 
-    fun startWatching(context: Context, target: File) {
+    fun startWatching(context: Context, target: File, resolvConfTarget: File? = null) {
         if (watching) return
         watching = true
-        writeSnapshot(context, target)
-        startPolling(context.applicationContext, target)
+        writeSnapshot(context, target, resolvConfTarget)
+        startPolling(context.applicationContext, target, resolvConfTarget)
         val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java) ?: return
         try {
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    writeSnapshot(context, target)
+                    writeSnapshot(context, target, resolvConfTarget)
                 }
 
                 override fun onLost(network: Network) {
-                    writeSnapshot(context, target)
+                    writeSnapshot(context, target, resolvConfTarget)
                 }
 
                 override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                    writeSnapshot(context, target)
+                    writeSnapshot(context, target, resolvConfTarget)
                 }
             }
             val request = NetworkRequest.Builder().clearCapabilities().build()
@@ -77,10 +82,10 @@ object NetworkAccessProvider {
         }
     }
 
-    private fun startPolling(context: Context, target: File) {
+    private fun startPolling(context: Context, target: File, resolvConfTarget: File?) {
         poller.scheduleWithFixedDelay(
             {
-                runCatching { writeSnapshot(context, target) }
+                runCatching { writeSnapshot(context, target, resolvConfTarget) }
                     .onFailure { LogBus.w(TAG, "LAN polling refresh failed: ${it.message}") }
             },
             POLL_INTERVAL_SECONDS,
@@ -90,7 +95,7 @@ object NetworkAccessProvider {
         LogBus.i(TAG, "LAN address polling enabled (${POLL_INTERVAL_SECONDS}s)")
     }
 
-    fun writeSnapshot(context: Context, target: File, webPort: Int = DEFAULT_WEB_PORT): Snapshot {
+    fun writeSnapshot(context: Context, target: File, resolvConfTarget: File? = null, webPort: Int = DEFAULT_WEB_PORT): Snapshot {
         val candidates = try {
             collectLanIpv4Candidates(context)
         } catch (error: Throwable) {
@@ -98,6 +103,12 @@ object NetworkAccessProvider {
             emptyList()
         }
         val addresses = candidates.map { it.ip }.distinct()
+        val dnsServers = try {
+            collectDnsServers(context)
+        } catch (error: Throwable) {
+            LogBus.w(TAG, "DNS server discovery failed: ${error.message}")
+            FALLBACK_DNS_SERVERS
+        }
         val updatedAt = System.currentTimeMillis()
         val root = JSONObject()
             .put("hostname", "android")
@@ -115,7 +126,7 @@ object NetworkAccessProvider {
         }
         root.put("addresses", jsonAddresses)
         val urls = addresses.map { "http://$it:$webPort" }
-        val snapshot = Snapshot(addresses, urls, updatedAt)
+        val snapshot = Snapshot(addresses, urls, updatedAt, dnsServers)
         val fingerprint = visibleCandidates.joinToString("|") { "${it.ip},${it.interfaceName},${it.source}" }
         val changed = fingerprint != lastSnapshotFingerprint
         if (changed || !target.exists()) {
@@ -131,7 +142,61 @@ object NetworkAccessProvider {
             logSnapshot(urls, candidates)
             notifyListeners(snapshot)
         }
+        if (resolvConfTarget != null) {
+            writeResolvConf(resolvConfTarget, dnsServers)
+        }
         return snapshot
+    }
+
+
+    private fun writeResolvConf(target: File, dnsServers: List<String>) {
+        val effectiveServers = dnsServers.ifEmpty { FALLBACK_DNS_SERVERS }
+        val content = buildString {
+            effectiveServers.take(3).forEach { append("nameserver ").append(it).append('\n') }
+            append("options timeout:2 attempts:2\n")
+        }
+        val fingerprint = effectiveServers.take(3).joinToString(",")
+        if (fingerprint != lastDnsFingerprint || !target.exists()) {
+            try {
+                target.parentFile?.mkdirs()
+                target.writeText(content)
+                lastDnsFingerprint = fingerprint
+            } catch (error: Throwable) {
+                LogBus.w(TAG, "Failed to write PRoot DNS config: ${error.message}")
+                return
+            }
+        }
+
+        val detail = "PRoot DNS servers: ${effectiveServers.take(3).joinToString(", ")}"
+        if (detail != lastLoggedDnsSummary) {
+            lastLoggedDnsSummary = detail
+            LogBus.i(TAG, detail)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun collectDnsServers(context: Context): List<String> {
+        val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java) ?: return FALLBACK_DNS_SERVERS
+        val networks = buildList {
+            cm.activeNetwork?.let { add(it) }
+            cm.allNetworks.forEach { network -> if (!contains(network)) add(network) }
+        }
+        val servers = networks.flatMap { network ->
+            val capabilities = cm.getNetworkCapabilities(network)
+            val hasInternet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            val isActive = network == cm.activeNetwork
+            if (!isActive && !hasInternet) return@flatMap emptyList()
+            cm.getLinkProperties(network)?.dnsServers.orEmpty()
+        }
+            .mapNotNull { normalizeDnsAddress(it) }
+            .distinct()
+        return servers.ifEmpty { FALLBACK_DNS_SERVERS }
+    }
+
+    private fun normalizeDnsAddress(address: InetAddress): String? {
+        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isMulticastAddress) return null
+        val host = address.hostAddress.orEmpty().substringBefore('%')
+        return host.takeIf { it.isNotBlank() }
     }
 
     private fun notifyListeners(snapshot: Snapshot) {
