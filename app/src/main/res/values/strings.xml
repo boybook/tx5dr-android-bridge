@@ -88,6 +88,18 @@
     <string name="notification_permission_denied">Not allowed. Open system settings and allow notifications for TX-5DR.</string>
     <string name="notification_permission_default">Not configured yet. Open system settings or enable reminders inside TX-5DR.</string>
 
+    <string name="webview_loading_title">Opening TX-5DR</string>
+    <string name="webview_loading_message">Preparing the embedded page...</string>
+    <string name="webview_waiting_title">Waiting for TX-5DR</string>
+    <string name="webview_waiting_render_message">The service is healthy, but Android WebView has not rendered the page yet.</string>
+    <string name="webview_waiting_service_message">The background service is not ready yet. Return to the status page or retry later.</string>
+    <string name="webview_error_title">Unable to open TX-5DR</string>
+    <string name="webview_retrying_title">Recovering WebView</string>
+    <string name="webview_retrying_message">The page did not render. Rebuilding Android WebView once...</string>
+    <string name="webview_renderer_gone">Android WebView renderer was restarted.</string>
+    <string name="webview_action_retry">Retry</string>
+    <string name="webview_action_status">Status page</string>
+
     <string name="mic_permission_denied_title">Microphone permission denied</string>
     <string name="mic_permission_allow_title">Allow microphone for audio routing</string>
     <string name="mic_permission_notice">The service can continue, but radio audio cannot be received without this permission.</string>

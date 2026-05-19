@@ -18,19 +18,26 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
 import android.util.Base64
+import android.view.Gravity
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,8 +72,14 @@ class MainActivity : ComponentActivity() {
     private var micWanted = false
     private lateinit var rootContainer: FrameLayout
     private var nativeWebView: WebView? = null
+    private var webOverlayContainer: FrameLayout? = null
     private var webNotificationBridge: AndroidWebNotificationBridge? = null
     private var pendingFilePathCallback: ValueCallback<Array<Uri>>? = null
+    private var webLoadGeneration = 0
+    private var webPageCommitted = false
+    private var webRetryCount = 0
+    private var webLoadStartedAtMs = 0L
+    private var lastWebViewUrl: String? = null
     private val webDownloadLock = Any()
     private var activeWebDownload: PendingWebDownload? = null
     private var pendingWebDownloadSave: PendingWebDownload? = null
@@ -293,13 +306,21 @@ class MainActivity : ComponentActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showNativeWebView(url: String) {
+    private fun showNativeWebView(url: String, retryCount: Int = 0) {
         destroyNativeWebView()
+        lastWebViewUrl = url
+        webRetryCount = retryCount
+        webPageCommitted = false
+        webLoadStartedAtMs = System.currentTimeMillis()
+        val generation = ++webLoadGeneration
+        val overlay = createWebOverlay().also { webOverlayContainer = it }
         val webView = WebView(this).apply {
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+            setBackgroundColor(if (isSystemDarkMode()) Color.rgb(18, 9, 11) else Color.rgb(255, 247, 248))
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
             configureWebViewTheme(settings)
             addJavascriptInterface(WebChromeBridge(), WEB_CHROME_BRIDGE)
             addJavascriptInterface(WebDownloadBridge(), WEB_DOWNLOAD_BRIDGE)
@@ -313,6 +334,12 @@ class MainActivity : ComponentActivity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                     notificationBridge.updateUrl(url)
+                    if (generation == webLoadGeneration && view === nativeWebView) {
+                        webPageCommitted = false
+                        webLoadStartedAtMs = System.currentTimeMillis()
+                        showWebLoadingOverlay(getString(R.string.webview_loading_title), getString(R.string.webview_loading_message))
+                        startWebLoadWatchdog(generation, this@MainActivity.lastWebViewUrl ?: url.orEmpty())
+                    }
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -326,6 +353,12 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPageCommitVisible(view: WebView, url: String) {
                     notificationBridge.updateUrl(url)
+                    if (generation == webLoadGeneration && view === nativeWebView) {
+                        webPageCommitted = true
+                        val elapsed = System.currentTimeMillis() - webLoadStartedAtMs
+                        LogBus.i("WebView", "Page committed visible in ${elapsed}ms: ${url.substringBefore('?')}")
+                        hideWebOverlay()
+                    }
                     installWebChromeProbe(view)
                     installWebDownloadBridge(view)
                 }
@@ -337,17 +370,170 @@ class MainActivity : ComponentActivity() {
                     installWebDownloadBridge(view)
                 }
 
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    if (request.isForMainFrame && generation == webLoadGeneration && view === nativeWebView) {
+                        val message = "${error.errorCode}: ${error.description}"
+                        LogBus.w("WebView", "Main frame load error $message ${request.url}")
+                        showWebErrorOverlay(getString(R.string.webview_error_title), message)
+                    } else {
+                        LogBus.w("WebView", "Subresource load error ${error.errorCode}: ${request.url}")
+                    }
+                }
+
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
-                    LogBus.w("WebView", "HTTP ${errorResponse.statusCode} ${request.url}")
+                    val message = "HTTP ${errorResponse.statusCode} ${errorResponse.reasonPhrase ?: ""}".trim()
+                    if (request.isForMainFrame && generation == webLoadGeneration && view === nativeWebView) {
+                        LogBus.w("WebView", "Main frame $message ${request.url}")
+                        showWebErrorOverlay(getString(R.string.webview_error_title), message)
+                    } else {
+                        LogBus.w("WebView", "$message ${request.url}")
+                    }
+                }
+
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    val didCrash = if (Build.VERSION.SDK_INT >= 26) detail.didCrash() else false
+                    LogBus.w("WebView", "Renderer process gone, didCrash=$didCrash")
+                    if (view === nativeWebView) {
+                        cleanupDeadWebView(view)
+                        if (webVisible) {
+                            val restoreUrl = lastWebViewUrl
+                            if (restoreUrl != null && webRetryCount < MAX_WEBVIEW_AUTO_RETRIES) {
+                                showWebLoadingOverlay(getString(R.string.webview_retrying_title), getString(R.string.webview_renderer_gone))
+                                rootContainer.post { showNativeWebView(restoreUrl, webRetryCount + 1) }
+                            } else {
+                                showWebErrorOverlay(getString(R.string.webview_error_title), getString(R.string.webview_renderer_gone))
+                            }
+                        }
+                    }
+                    return true
                 }
             }
             isFocusable = true
             isFocusableInTouchMode = true
-            loadUrl(url)
         }
         applyWebStatusBarFallback()
         rootContainer.addView(webView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        rootContainer.addView(overlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         nativeWebView = webView
+        showWebLoadingOverlay(getString(R.string.webview_loading_title), getString(R.string.webview_loading_message))
+        webView.post {
+            if (generation == webLoadGeneration && webView === nativeWebView) {
+                LogBus.i("WebView", "Loading ${url.substringBefore('?')} retry=$retryCount")
+                webView.loadUrl(url)
+                startWebLoadWatchdog(generation, url)
+            }
+        }
+    }
+
+    private fun startWebLoadWatchdog(generation: Int, url: String) {
+        rootContainer.postDelayed({
+            if (generation != webLoadGeneration || !webVisible || webPageCommitted) return@postDelayed
+            val elapsed = System.currentTimeMillis() - webLoadStartedAtMs
+            LogBus.w("WebView", "No visible page commit after ${elapsed}ms")
+            if (bridgeStatus.webHealthy && webRetryCount < MAX_WEBVIEW_AUTO_RETRIES) {
+                showWebLoadingOverlay(getString(R.string.webview_retrying_title), getString(R.string.webview_retrying_message))
+                showNativeWebView(url, webRetryCount + 1)
+            } else {
+                val message = if (bridgeStatus.webHealthy) {
+                    getString(R.string.webview_waiting_render_message)
+                } else {
+                    getString(R.string.webview_waiting_service_message)
+                }
+                showWebErrorOverlay(getString(R.string.webview_waiting_title), message)
+            }
+        }, WEBVIEW_LOAD_TIMEOUT_MS)
+    }
+
+    private fun createWebOverlay(): FrameLayout {
+        return FrameLayout(this).apply {
+            setBackgroundColor(if (isSystemDarkMode()) Color.rgb(18, 9, 11) else Color.rgb(255, 247, 248))
+            isClickable = true
+            visibility = View.VISIBLE
+        }
+    }
+
+    private fun showWebLoadingOverlay(title: String, message: String) {
+        val overlay = webOverlayContainer ?: return
+        overlay.removeAllViews()
+        overlay.visibility = View.VISIBLE
+        overlay.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(48, 48, 48, 48)
+                addView(ProgressBar(this@MainActivity).apply { isIndeterminate = true })
+                addView(TextView(this@MainActivity).apply {
+                    text = title
+                    textSize = 22f
+                    setTextColor(if (isSystemDarkMode()) Color.WHITE else Color.rgb(34, 22, 25))
+                    gravity = Gravity.CENTER
+                    setPadding(0, 28, 0, 8)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = message
+                    textSize = 14f
+                    setTextColor(if (isSystemDarkMode()) Color.rgb(231, 205, 211) else Color.rgb(95, 69, 76))
+                    gravity = Gravity.CENTER
+                })
+            },
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
+    }
+
+    private fun showWebErrorOverlay(title: String, message: String) {
+        val overlay = webOverlayContainer ?: return
+        overlay.removeAllViews()
+        overlay.visibility = View.VISIBLE
+        val foreground = if (isSystemDarkMode()) Color.WHITE else Color.rgb(34, 22, 25)
+        val muted = if (isSystemDarkMode()) Color.rgb(231, 205, 211) else Color.rgb(95, 69, 76)
+        overlay.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(48, 48, 48, 48)
+                addView(TextView(this@MainActivity).apply {
+                    text = title
+                    textSize = 22f
+                    setTextColor(foreground)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 0, 0, 10)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = message
+                    textSize = 14f
+                    setTextColor(muted)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 0, 0, 24)
+                })
+                addView(LinearLayout(this@MainActivity).apply {
+                    gravity = Gravity.CENTER
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(Button(this@MainActivity).apply {
+                        text = getString(R.string.webview_action_retry)
+                        setOnClickListener { lastWebViewUrl?.let { showNativeWebView(it) } }
+                    })
+                    addView(Button(this@MainActivity).apply {
+                        text = getString(R.string.webview_action_status)
+                        setOnClickListener { releaseWebView() }
+                    })
+                })
+            },
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
+    }
+
+    private fun hideWebOverlay() {
+        webOverlayContainer?.visibility = View.GONE
+    }
+
+    private fun cleanupDeadWebView(view: WebView) {
+        if (nativeWebView === view) nativeWebView = null
+        webNotificationBridge = null
+        webLoadGeneration += 1
+        webPageCommitted = false
+        runCatching { rootContainer.removeView(view) }
+        runCatching { view.stopLoading() }
+        runCatching { view.destroy() }
     }
 
     private fun createWebChromeClient(): WebChromeClient = object : WebChromeClient() {
@@ -838,6 +1024,8 @@ class MainActivity : ComponentActivity() {
         (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
     private fun destroyNativeWebView() {
+        webLoadGeneration += 1
+        webPageCommitted = false
         pendingFilePathCallback?.onReceiveValue(null)
         pendingFilePathCallback = null
         synchronized(webDownloadLock) {
@@ -847,6 +1035,11 @@ class MainActivity : ComponentActivity() {
             pendingWebDownloadSave = null
         }
         webNotificationBridge = null
+        webOverlayContainer?.let { overlay ->
+            runCatching { rootContainer.removeView(overlay) }
+            overlay.removeAllViews()
+        }
+        webOverlayContainer = null
         nativeWebView?.let { view ->
             runCatching { rootContainer.removeView(view) }
             runCatching { view.stopLoading() }
@@ -997,5 +1190,7 @@ class MainActivity : ComponentActivity() {
         const val ACTION_OPEN_WEBVIEW = "com.tx5dr.bridge.OPEN_WEBVIEW"
         private const val MAX_WEB_DOWNLOAD_BYTES = 128L * 1024L * 1024L
         private const val RELEASE_PREVIEW_MIN_INTERVAL_MS = 10 * 60 * 1000L
+        private const val WEBVIEW_LOAD_TIMEOUT_MS = 9000L
+        private const val MAX_WEBVIEW_AUTO_RETRIES = 1
     }
 }

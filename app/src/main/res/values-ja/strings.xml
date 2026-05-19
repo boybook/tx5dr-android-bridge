@@ -88,6 +88,18 @@
     <string name="notification_permission_denied">許可されていません。システム設定を開き、TX-5DR の通知を許可してください。</string>
     <string name="notification_permission_default">まだ設定されていません。システム設定を開くか、TX-5DR 内で通知を有効化するときに許可してください。</string>
 
+    <string name="webview_loading_title">TX-5DR を開いています</string>
+    <string name="webview_loading_message">内蔵ページを準備しています...</string>
+    <string name="webview_waiting_title">TX-5DR を待機中</string>
+    <string name="webview_waiting_render_message">サービスは正常ですが、Android WebView がまだページを描画していません。</string>
+    <string name="webview_waiting_service_message">バックグラウンドサービスはまだ準備できていません。状態ページに戻るか、後でもう一度お試しください。</string>
+    <string name="webview_error_title">TX-5DR を開けません</string>
+    <string name="webview_retrying_title">WebView を復旧中</string>
+    <string name="webview_retrying_message">ページが描画されませんでした。Android WebView を一度再作成しています...</string>
+    <string name="webview_renderer_gone">Android WebView のレンダラーが再起動されました。</string>
+    <string name="webview_action_retry">再試行</string>
+    <string name="webview_action_status">状態ページ</string>
+
     <string name="mic_permission_denied_title">マイク権限が拒否されました</string>
     <string name="mic_permission_allow_title">オーディオ入力のためマイクを許可</string>
     <string name="mic_permission_notice">サービスは継続できますが、この権限がないと無線機の音声を受信できません。</string>
