@@ -149,4 +149,19 @@
     <string name="bridge_state_stopped">已停止</string>
     <string name="bridge_state_error">异常</string>
     <string name="bridge_state_unknown">未知</string>
+    <string name="data_directory_title">数据目录</string>
+    <string name="data_directory_external_subtitle">用户数据、日志、插件和插件数据已存放在 Android 可见目录。</string>
+    <string name="data_directory_internal_subtitle">外部存储不可用，用户数据暂时保存在应用私有目录。</string>
+    <string name="data_directory_external_label">Android 外部媒体目录</string>
+    <string name="data_directory_internal_label">应用私有回退目录</string>
+    <string name="data_directory_user_data">用户数据</string>
+    <string name="data_directory_logs">日志</string>
+    <string name="data_directory_plugins">插件</string>
+    <string name="data_directory_plugin_data">插件数据</string>
+    <string name="copy_data_directory_path">复制数据目录路径</string>
+    <string name="open_data_directory">打开数据目录</string>
+    <string name="data_directory_open_failed">数据目录尚未就绪。</string>
+    <string name="data_directory_open_hint">请在文件管理器中打开：%1$s</string>
+    <string name="not_available">不可用</string>
+
 </resources>

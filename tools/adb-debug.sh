@@ -67,7 +67,7 @@ export PROOT_LOADER="\$NATIVE/libproot_loader.so"
 export PROOT_LOADER_32="\$NATIVE/libproot_loader32.so"
 export PROOT_TMP_DIR="/data/user/0/$PKG/files/runtime/proot-tmp"
 RESOLV="/data/user/0/$PKG/files/runtime/tx5dr-data/runtime/resolv.conf"
-mkdir -p "\$(dirname "\$RESOLV")"
+mkdir -p "\$(dirname "\$RESOLV")" /data/user/0/$PKG/files/runtime/tx5dr-data/user/data /data/user/0/$PKG/files/runtime/tx5dr-data/user/logs /data/user/0/$PKG/files/runtime/tx5dr-data/user/plugins /data/user/0/$PKG/files/runtime/tx5dr-data/user/plugin-data
 if [ ! -s "\$RESOLV" ]; then
   printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 1.1.1.1\noptions timeout:2 attempts:2\n' > "\$RESOLV"
 fi
@@ -75,6 +75,7 @@ fi
   --rootfs=/data/user/0/$PKG/files/runtime/rootfs \\
   --pwd=/ \\
   --bind=/data/user/0/$PKG/files/runtime/tx5dr-data:/opt/tx5dr-data \\
+  --bind=/data/user/0/$PKG/files/runtime/tx5dr-data/user:/opt/tx5dr-user \\
   --bind=/data/user/0/$PKG/files/runtime/tx5dr:/opt/tx5dr \\
   --bind=/data/user/0/$PKG/files/runtime/tx5dr-data/runtime/resolv.conf:/etc/resolv.conf \\
   --bind=/proc:/proc \\
@@ -82,7 +83,7 @@ fi
   --bind=/sys:/sys \\
   --kill-on-exit \\
   --link2symlink \\
-  /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PULSE_SERVER=tcp:127.0.0.1:4718 /bin/bash -lc "$inner"
+  /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PULSE_SERVER=tcp:127.0.0.1:4718 TX5DR_DATA_DIR=/opt/tx5dr-user/data TX5DR_LOGS_DIR=/opt/tx5dr-user/logs TX5DR_PLUGINS_DIR=/opt/tx5dr-user/plugins TX5DR_PLUGIN_DATA_DIR=/opt/tx5dr-user/plugin-data TX5DR_CONFIG_DIR=/opt/tx5dr-data/config TX5DR_CACHE_DIR=/opt/tx5dr-data/cache /bin/bash -lc "$inner"
 SCRIPT
 }
 

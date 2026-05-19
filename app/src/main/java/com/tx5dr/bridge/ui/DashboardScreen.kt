@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lan
@@ -91,6 +92,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tx5dr.bridge.AudioRoute
 import com.tx5dr.bridge.BridgeStatus
+import com.tx5dr.bridge.ExternalDataStatus
 import com.tx5dr.bridge.R
 import com.tx5dr.bridge.ReleasePreview
 import com.tx5dr.bridge.RuntimeState
@@ -116,6 +118,7 @@ fun DashboardScreen(
     showLogSheet: Boolean,
     showSettingsSheet: Boolean,
     notificationPermissionState: String,
+    externalDataStatus: ExternalDataStatus,
     controlSystemBars: Boolean = true,
     onInstallClick: () -> Unit,
     onConfirmInstall: () -> Unit,
@@ -131,6 +134,7 @@ fun DashboardScreen(
     onRefreshBridges: () -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
+    onOpenDataDirectory: () -> Unit,
     onShowLogs: () -> Unit,
     onDismissLogs: () -> Unit,
     onShowSettings: () -> Unit,
@@ -235,6 +239,7 @@ fun DashboardScreen(
                 LogsSheet(
                     bridgeStatus = bridgeStatus,
                     logs = logs,
+                    externalDataStatus = externalDataStatus,
                     onDismiss = onDismissLogs,
                 )
             }
@@ -244,12 +249,15 @@ fun DashboardScreen(
                     manifestUrl = manifestUrl,
                     autoOpenWebView = autoOpenWebView,
                     notificationPermissionState = notificationPermissionState,
+                    externalDataStatus = externalDataStatus,
                     onDismiss = onDismissSettings,
                     onManifestUrlChange = onManifestUrlChange,
                     onAutoOpenWebViewChange = onAutoOpenWebViewChange,
                     onServiceOnlyModeChange = onServiceOnlyModeChange,
                     onOpenBatterySettings = onOpenBatterySettings,
                     onOpenNotificationSettings = onOpenNotificationSettings,
+                    onOpenDataDirectory = onOpenDataDirectory,
+                    onCopyText = onCopyText,
                     onRefreshLan = onRefreshLan,
                     onInstallClick = onInstallClick,
                 )
@@ -823,6 +831,7 @@ private fun InstallRuntimeDialog(
 private fun LogsSheet(
     bridgeStatus: BridgeStatus,
     logs: String,
+    externalDataStatus: ExternalDataStatus,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -837,6 +846,7 @@ private fun LogsSheet(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(stringResource(R.string.runtime_logs), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            DataDirectoryDiagnostic(externalDataStatus)
             bridgeStatus.error?.let {
                 Card(Modifier.fillMaxWidth()) {
                     ListItem(
@@ -900,12 +910,15 @@ private fun SettingsSheet(
     manifestUrl: String,
     autoOpenWebView: Boolean,
     notificationPermissionState: String,
+    externalDataStatus: ExternalDataStatus,
     onDismiss: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
+    onOpenDataDirectory: () -> Unit,
+    onCopyText: (String) -> Unit,
     onRefreshLan: () -> Unit,
     onInstallClick: () -> Unit,
 ) {
@@ -929,6 +942,11 @@ private fun SettingsSheet(
                     },
                 )
             }
+            DataDirectorySettingsCard(
+                status = externalDataStatus,
+                onCopyText = onCopyText,
+                onOpenDataDirectory = onOpenDataDirectory,
+            )
             SettingsGroup {
                 SettingsAction(
                     icon = Icons.Filled.Lan,
@@ -971,6 +989,101 @@ private fun SettingsSheet(
             )
             Spacer(Modifier.height(8.dp))
         }
+    }
+}
+
+
+@Composable
+private fun DataDirectorySettingsCard(
+    status: ExternalDataStatus,
+    onCopyText: (String) -> Unit,
+    onOpenDataDirectory: () -> Unit,
+) {
+    SettingsGroup {
+        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            ListItem(
+                leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                headlineContent = { Text(stringResource(R.string.data_directory_title)) },
+                supportingContent = {
+                    Text(
+                        if (status.external) stringResource(R.string.data_directory_external_subtitle)
+                        else stringResource(R.string.data_directory_internal_subtitle),
+                    )
+                },
+                trailingContent = {
+                    IconButton(
+                        enabled = !status.rootPath.isNullOrBlank(),
+                        onClick = { status.rootPath?.let(onCopyText) },
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.copy_data_directory_path))
+                    }
+                },
+            )
+            DataDirectoryPathRow(stringResource(R.string.data_directory_user_data), status.dataPath)
+            DataDirectoryPathRow(stringResource(R.string.data_directory_logs), status.logsPath)
+            DataDirectoryPathRow(stringResource(R.string.data_directory_plugins), status.pluginsPath)
+            DataDirectoryPathRow(stringResource(R.string.data_directory_plugin_data), status.pluginDataPath)
+            status.fallbackReason?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            TextButton(
+                onClick = onOpenDataDirectory,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.open_data_directory))
+            }
+        }
+    }
+}
+
+@Composable
+private fun DataDirectoryPathRow(label: String, path: String?) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            modifier = Modifier.widthIn(min = 86.dp, max = 116.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            path ?: stringResource(R.string.not_available),
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+}
+
+@Composable
+private fun DataDirectoryDiagnostic(status: ExternalDataStatus) {
+    Card(Modifier.fillMaxWidth()) {
+        ListItem(
+            leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null) },
+            headlineContent = { Text(stringResource(R.string.data_directory_title)) },
+            supportingContent = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(status.rootPath ?: stringResource(R.string.not_available), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val storageLabel = if (status.external) stringResource(R.string.data_directory_external_label) else stringResource(R.string.data_directory_internal_label)
+                    Text(storageLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    status.migrationSummary?.takeIf { it.isNotBlank() }?.let {
+                        Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+        )
     }
 }
 

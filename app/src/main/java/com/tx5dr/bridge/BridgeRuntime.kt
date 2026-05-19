@@ -43,8 +43,10 @@ object BridgeRuntime {
     fun init(context: Context) {
         app = context.applicationContext
         prefs = app.getSharedPreferences("bridge", Context.MODE_PRIVATE)
-        paths = RuntimePaths(app.filesDir, File(app.applicationInfo.nativeLibraryDir))
+        val externalUserRoot = selectExternalUserRoot(app)
+        paths = RuntimePaths(app.filesDir, File(app.applicationInfo.nativeLibraryDir), externalUserRoot)
         paths.ensureDirs()
+        migrateExternalUserDataIfNeeded()
         NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile, paths.resolvConfFile)
         AndroidUsbAudioBridge.startWatchingDevices(app)
         AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
@@ -80,6 +82,8 @@ object BridgeRuntime {
     }
 
     fun snapshotStatus(): BridgeStatus = status
+
+    fun externalDataStatus(): ExternalDataStatus = paths.externalDataStatus()
 
     fun bootstrap() {
         executor.execute {
@@ -459,7 +463,7 @@ object BridgeRuntime {
     private fun buildRuntimeCommand(): List<String> {
         val script = """
 set -e
-mkdir -p /opt/tx5dr-data/logs /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /tmp/pulse
+mkdir -p /opt/tx5dr-data/config /opt/tx5dr-data/cache /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /opt/tx5dr-user/data /opt/tx5dr-user/logs /opt/tx5dr-user/plugins /opt/tx5dr-user/plugin-data /tmp/pulse
 export HOME=/root
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export NODE_ENV=production
@@ -469,9 +473,11 @@ export TX5DR_RUNTIME_FLAVOR=android-bridge
 export TX5DR_SERVER_HOST=127.0.0.1
 export TX5DR_NETWORK_ACCESS_FILE=/opt/tx5dr-data/runtime/android-network-access.json
 export TX5DR_ANDROID_SERIAL_DEVICES_FILE=/opt/tx5dr-data/runtime/android-serial-devices.json
-export TX5DR_DATA_DIR=/opt/tx5dr-data
+export TX5DR_DATA_DIR=/opt/tx5dr-user/data
+export TX5DR_LOGS_DIR=/opt/tx5dr-user/logs
+export TX5DR_PLUGINS_DIR=/opt/tx5dr-user/plugins
+export TX5DR_PLUGIN_DATA_DIR=/opt/tx5dr-user/plugin-data
 export TX5DR_CONFIG_DIR=/opt/tx5dr-data/config
-export TX5DR_LOGS_DIR=/opt/tx5dr-data/logs
 export TX5DR_CACHE_DIR=/opt/tx5dr-data/cache
 export PULSE_SERVER=tcp:127.0.0.1:4718
 export TX5DR_RTAUDIO_API=alsa
@@ -498,7 +504,7 @@ pulseaudio --exit-idle-time=-1 --daemonize=yes --log-target=stderr --load='modul
 cd /opt/tx5dr/current
 node /opt/tx5dr/current/packages/server/dist/scripts/server-launcher.js /opt/tx5dr/current/packages/server/dist/index.js 2>&1 | sed -u 's/^/[server] /' &
 server_pid=$!
-PORT=8076 HOST=0.0.0.0 TARGET=http://127.0.0.1:4000 STATIC_DIR=/opt/tx5dr/current/packages/web/dist TX5DR_CLIENT_TOOLS_READY_FILE=/opt/tx5dr-data/runtime/client-tools-ready.json TX5DR_CLIENT_TOOLS_LOG_FILE=/opt/tx5dr-data/logs/client-tools.log node packages/client-tools/src/proxy.js 2>&1 | sed -u 's/^/[client-tools] /' &
+PORT=8076 HOST=0.0.0.0 TARGET=http://127.0.0.1:4000 STATIC_DIR=/opt/tx5dr/current/packages/web/dist TX5DR_CLIENT_TOOLS_READY_FILE=/opt/tx5dr-data/runtime/client-tools-ready.json TX5DR_CLIENT_TOOLS_LOG_FILE=/opt/tx5dr-user/logs/client-tools.log node packages/client-tools/src/proxy.js 2>&1 | sed -u 's/^/[client-tools] /' &
 client_pid=$!
 trap 'kill ${'$'}server_pid ${'$'}client_pid 2>/dev/null || true; wait || true; exit 0' TERM INT
 wait -n ${'$'}server_pid ${'$'}client_pid
@@ -542,6 +548,7 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
         "--rootfs=${paths.rootfsDir.absolutePath}",
         "--pwd=/",
         "--bind=${paths.dataDir.absolutePath}:/opt/tx5dr-data",
+        "--bind=${paths.externalUserRootDir.absolutePath}:/opt/tx5dr-user",
         "--bind=${paths.txDir.absolutePath}:/opt/tx5dr",
         "--bind=${paths.resolvConfFile.absolutePath}:/etc/resolv.conf",
         "--bind=/proc:/proc",
@@ -838,13 +845,133 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
         }
     }
 
-    data class RuntimePaths(val base: File, val nativeLibDir: File) {
+
+    data class ExternalRootSelection(val root: File, val external: Boolean, val fallbackReason: String? = null)
+
+    private fun selectExternalUserRoot(context: Context): ExternalRootSelection {
+        val candidates = buildList {
+            context.externalMediaDirs?.forEach { dir -> if (dir != null) add(File(dir, "TX-5DR")) }
+            context.getExternalFilesDirs(null)?.forEach { dir -> if (dir != null) add(File(dir, "TX-5DR")) }
+        }
+        for (candidate in candidates) {
+            try {
+                candidate.mkdirs()
+                if (candidate.isDirectory && candidate.canWrite()) {
+                    return ExternalRootSelection(candidate, external = true)
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        return ExternalRootSelection(
+            root = File(File(context.filesDir, "runtime/tx5dr-data"), "user"),
+            external = false,
+            fallbackReason = "Android external media directory is not writable; using app-private storage.",
+        )
+    }
+
+    private fun migrateExternalUserDataIfNeeded() {
+        val marker = paths.externalMigrationMarker
+        val previousRoot = runCatching {
+            marker.takeIf { it.isFile }?.readText()?.let { JSONObject(it).optString("root").takeIf { root -> root.isNotBlank() } }
+        }.getOrNull()
+        if (previousRoot == paths.externalUserRootDir.absolutePath) return
+        val moved = mutableListOf<String>()
+        val skipped = mutableListOf<String>()
+        val errors = mutableListOf<String>()
+        val legacyMappings = listOf(
+            File(paths.dataDir, "logbook") to File(paths.externalUserDataDir, "logbook"),
+            File(paths.dataDir, "voice-keyer") to File(paths.externalUserDataDir, "voice-keyer"),
+            File(paths.dataDir, "cw-keyer") to File(paths.externalUserDataDir, "cw-keyer"),
+            File(paths.dataDir, "plugins") to paths.externalPluginsDir,
+            File(paths.dataDir, "plugin-data") to paths.externalPluginDataDir,
+            File(paths.dataDir, "logs") to paths.externalLogsDir,
+        )
+        val previousRootMappings = previousRoot?.let { root ->
+            listOf(
+                File(root, "data") to paths.externalUserDataDir,
+                File(root, "logs") to paths.externalLogsDir,
+                File(root, "plugins") to paths.externalPluginsDir,
+                File(root, "plugin-data") to paths.externalPluginDataDir,
+            )
+        }.orEmpty()
+        for ((source, target) in legacyMappings + previousRootMappings) {
+            val name = source.name
+
+            if (!source.exists()) continue
+            if (targetHasUserContent(target)) {
+                skipped += name
+                continue
+            }
+            runCatching {
+                copyRecursivelySafely(source, target)
+                moved += name
+            }.onFailure { error ->
+                errors += "$name: ${error.message ?: error.javaClass.simpleName}"
+            }
+        }
+        paths.dataDir.listFiles()?.forEach { source ->
+            val name = source.name
+            val lower = name.lowercase()
+            if (source.isFile && (lower.endsWith(".adi") || lower.endsWith(".adif"))) {
+                val target = File(paths.externalUserDataDir, name)
+                if (target.exists()) {
+                    skipped += name
+                } else {
+                    runCatching {
+                        copyRecursivelySafely(source, target)
+                        moved += name
+                    }.onFailure { error -> errors += "$name: ${error.message ?: error.javaClass.simpleName}" }
+                }
+            }
+        }
+        val summary = JSONObject()
+            .put("external", paths.externalRootSelection.external)
+            .put("root", paths.externalUserRootDir.absolutePath)
+            .put("moved", moved.joinToString(","))
+            .put("skipped", skipped.joinToString(","))
+            .put("errors", errors.joinToString(","))
+            .put("createdAt", System.currentTimeMillis())
+            .toString()
+        runCatching {
+            marker.parentFile?.mkdirs()
+            marker.writeText(summary)
+        }.onFailure { error -> LogBus.w(TAG, "Failed to write external data migration marker: ${error.message}") }
+        if (errors.isEmpty()) {
+            LogBus.i(TAG, "External user data ready at ${paths.externalUserRootDir.absolutePath}; migrated=${moved.joinToString(",")}")
+        } else {
+            LogBus.w(TAG, "External user data migration finished with errors: ${errors.joinToString("; ")}")
+        }
+    }
+
+    private fun targetHasUserContent(target: File): Boolean {
+        if (!target.exists()) return false
+        if (target.isFile) return true
+        return target.list()?.isNotEmpty() == true
+    }
+
+    private fun copyRecursivelySafely(source: File, target: File) {
+        if (source.isDirectory) {
+            target.mkdirs()
+            source.listFiles()?.forEach { child -> copyRecursivelySafely(child, File(target, child.name)) }
+        } else {
+            target.parentFile?.mkdirs()
+            source.inputStream().use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
+        }
+    }
+
+    data class RuntimePaths(val base: File, val nativeLibDir: File, val externalRootSelection: ExternalRootSelection) {
         val workDir = File(base, "runtime")
         val cacheDir = File(workDir, "cache")
         val hostLibDir = File(workDir, "host-libs")
         val prootTmpDir = File(workDir, "proot-tmp")
         val rootfsDir = File(workDir, "rootfs")
         val dataDir = File(workDir, "tx5dr-data")
+        val externalUserRootDir = externalRootSelection.root
+        val externalUserDataDir = File(externalUserRootDir, "data")
+        val externalLogsDir = File(externalUserRootDir, "logs")
+        val externalPluginsDir = File(externalUserRootDir, "plugins")
+        val externalPluginDataDir = File(externalUserRootDir, "plugin-data")
+        val externalMigrationMarker = File(dataDir, "runtime/external-data-migration.json")
         val androidNetworkAccessFile = File(dataDir, "runtime/android-network-access.json")
         val androidSerialDevicesFile = File(dataDir, "runtime/android-serial-devices.json")
         val resolvConfFile = File(dataDir, "runtime/resolv.conf")
@@ -859,9 +986,26 @@ exec tx5dr-android-serial-pty /opt/tx5dr-data/android-dev/ttyUSB0 127.0.0.1 4721
         val zstdLib = File(nativeLibDir, "libzstd.so")
         val rootfsReady = File(rootfsDir, ".tx5dr-rootfs-ready")
         fun ensureDirs() {
-            listOf(workDir, cacheDir, hostLibDir, prootTmpDir, rootfsDir, dataDir, releasesDir).forEach { it.mkdirs() }
+            listOf(
+                workDir, cacheDir, hostLibDir, prootTmpDir, rootfsDir, dataDir, releasesDir,
+                externalUserRootDir, externalUserDataDir, externalLogsDir, externalPluginsDir, externalPluginDataDir,
+            ).forEach { it.mkdirs() }
             androidNetworkAccessFile.parentFile?.mkdirs()
+            externalMigrationMarker.parentFile?.mkdirs()
         }
+
+        fun externalDataStatus(): ExternalDataStatus = ExternalDataStatus(
+            rootPath = externalUserRootDir.absolutePath,
+            dataPath = externalUserDataDir.absolutePath,
+            logsPath = externalLogsDir.absolutePath,
+            pluginsPath = externalPluginsDir.absolutePath,
+            pluginDataPath = externalPluginDataDir.absolutePath,
+            external = externalRootSelection.external,
+            fallbackReason = externalRootSelection.fallbackReason,
+            migrationSummary = runCatching {
+                externalMigrationMarker.takeIf { it.isFile }?.readText()?.take(500)
+            }.getOrNull(),
+        )
     }
 
     private const val MIC_SCRIPT = """

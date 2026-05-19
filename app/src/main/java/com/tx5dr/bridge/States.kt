@@ -19,3 +19,15 @@ data class ReleasePreview(
     val sizeBytes: Long,
     val url: String,
 )
+
+
+data class ExternalDataStatus(
+    val rootPath: String? = null,
+    val dataPath: String? = null,
+    val logsPath: String? = null,
+    val pluginsPath: String? = null,
+    val pluginDataPath: String? = null,
+    val external: Boolean = false,
+    val fallbackReason: String? = null,
+    val migrationSummary: String? = null,
+)

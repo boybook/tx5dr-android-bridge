@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
     private var showLogSheet by mutableStateOf(false)
     private var showSettingsSheet by mutableStateOf(false)
     private var notificationPermissionState by mutableStateOf("default")
+    private var externalDataStatus by mutableStateOf(ExternalDataStatus())
     private var webVisible by mutableStateOf(false)
     private var webSuppressedForSession by mutableStateOf(false)
     private var micWanted = false
@@ -142,6 +143,7 @@ class MainActivity : ComponentActivity() {
         manifestUrl = BridgeRuntime.getManifestUrl()
         refreshLanUrls()
         refreshAdminToken()
+        refreshExternalDataStatus()
         bridgeStatus = BridgeRuntime.snapshotStatus()
         logs = LogBus.snapshot()
         checkRemoteVersion(force = true)
@@ -164,6 +166,7 @@ class MainActivity : ComponentActivity() {
                     showLogSheet = showLogSheet,
                     showSettingsSheet = showSettingsSheet,
                     notificationPermissionState = notificationPermissionState,
+                    externalDataStatus = externalDataStatus,
                     controlSystemBars = !webVisible,
                     onInstallClick = { prepareInstallDialog() },
                     onConfirmInstall = { showInstallDialog = false; startInstall() },
@@ -178,6 +181,7 @@ class MainActivity : ComponentActivity() {
                     onSetKeepAlive = { setKeepAlive(it) },
                     onOpenBatterySettings = { openBatterySettings() },
                     onOpenNotificationSettings = { openNotificationSettings() },
+                    onOpenDataDirectory = { openDataDirectory() },
                     onRefreshBridges = { BridgeService.start(this@MainActivity, BridgeService.ACTION_START_BRIDGES) },
                     onShowLogs = { showLogSheet = true },
                     onDismissLogs = { showLogSheet = false },
@@ -218,6 +222,7 @@ class MainActivity : ComponentActivity() {
         updateNotificationPermissionState()
         refreshLanUrls()
         refreshAdminToken()
+        refreshExternalDataStatus()
         AndroidUsbAudioBridge.refreshDevices(this)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         if (AndroidUsbAudioBridge.hasRecordPermission(this) && BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
@@ -275,6 +280,26 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshAdminToken() {
         adminToken = BridgeRuntime.getAdminToken()
+    }
+
+    private fun refreshExternalDataStatus() {
+        externalDataStatus = BridgeRuntime.externalDataStatus()
+    }
+
+    private fun openDataDirectory() {
+        val root = BridgeRuntime.externalDataStatus().rootPath
+        if (root.isNullOrBlank()) {
+            Toast.makeText(this, getString(R.string.data_directory_open_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(Uri.parse(File(root).toURI().toString()), "resource/folder")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure {
+                Toast.makeText(this, getString(R.string.data_directory_open_hint, root), Toast.LENGTH_LONG).show()
+            }
     }
 
     private fun openWebView() {

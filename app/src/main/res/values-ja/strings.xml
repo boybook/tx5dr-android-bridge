@@ -149,4 +149,19 @@
     <string name="bridge_state_stopped">停止済み</string>
     <string name="bridge_state_error">異常</string>
     <string name="bridge_state_unknown">不明</string>
+    <string name="data_directory_title">データディレクトリ</string>
+    <string name="data_directory_external_subtitle">ユーザーデータ、ログ、プラグイン、プラグインデータを Android から見える場所に保存します。</string>
+    <string name="data_directory_internal_subtitle">外部ストレージを利用できないため、アプリ内の非公開領域に保存しています。</string>
+    <string name="data_directory_external_label">Android 外部メディアストレージ</string>
+    <string name="data_directory_internal_label">アプリ内のフォールバック領域</string>
+    <string name="data_directory_user_data">ユーザーデータ</string>
+    <string name="data_directory_logs">ログ</string>
+    <string name="data_directory_plugins">プラグイン</string>
+    <string name="data_directory_plugin_data">プラグインデータ</string>
+    <string name="copy_data_directory_path">データディレクトリのパスをコピー</string>
+    <string name="open_data_directory">データディレクトリを開く</string>
+    <string name="data_directory_open_failed">データディレクトリはまだ準備できていません。</string>
+    <string name="data_directory_open_hint">ファイルアプリでこのパスを開いてください: %1$s</string>
+    <string name="not_available">利用できません</string>
+
 </resources>

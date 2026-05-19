@@ -149,4 +149,19 @@
     <string name="bridge_state_stopped">Stopped</string>
     <string name="bridge_state_error">Error</string>
     <string name="bridge_state_unknown">Unknown</string>
+    <string name="data_directory_title">Data directory</string>
+    <string name="data_directory_external_subtitle">User data, logs, plugins, and plugin data are stored in Android-visible storage.</string>
+    <string name="data_directory_internal_subtitle">External storage is unavailable, so user data is stored privately in the app.</string>
+    <string name="data_directory_external_label">External Android media storage</string>
+    <string name="data_directory_internal_label">App-private fallback storage</string>
+    <string name="data_directory_user_data">User data</string>
+    <string name="data_directory_logs">Logs</string>
+    <string name="data_directory_plugins">Plugins</string>
+    <string name="data_directory_plugin_data">Plugin data</string>
+    <string name="copy_data_directory_path">Copy data directory path</string>
+    <string name="open_data_directory">Open data directory</string>
+    <string name="data_directory_open_failed">Data directory is not ready.</string>
+    <string name="data_directory_open_hint">Open this path in Files: %1$s</string>
+    <string name="not_available">Not available</string>
+
 </resources>
