@@ -59,7 +59,7 @@ class BridgeService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "TX-5DR", NotificationManager.IMPORTANCE_LOW))
+            manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, getString(R.string.app_name), NotificationManager.IMPORTANCE_LOW))
         }
     }
 
@@ -81,32 +81,32 @@ class BridgeService : Service() {
         )
         val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return builder
-            .setContentTitle("TX-5DR")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(buildString {
                 append(notificationStateLabel(status))
-                if (status.webHealthy) append(" · 服务运行中")
-                if (keepAlive) append(" · 值守中")
+                if (status.webHealthy) append(" · ").append(getString(R.string.notification_service_running))
+                if (keepAlive) append(" · ").append(getString(R.string.notification_keep_alive))
                 if (lan != null) append(" · ").append(lan.removePrefix("http://"))
             })
             .setSmallIcon(com.tx5dr.bridge.R.drawable.ic_stat_tx5dr)
             .setContentIntent(openIntent)
-            .addAction(Notification.Action.Builder(com.tx5dr.bridge.R.drawable.ic_stat_tx5dr, "打开", openIntent).build())
-            .addAction(Notification.Action.Builder(com.tx5dr.bridge.R.drawable.ic_stat_tx5dr, "停止", stopIntent).build())
+            .addAction(Notification.Action.Builder(com.tx5dr.bridge.R.drawable.ic_stat_tx5dr, getString(R.string.notification_action_open), openIntent).build())
+            .addAction(Notification.Action.Builder(com.tx5dr.bridge.R.drawable.ic_stat_tx5dr, getString(R.string.notification_action_stop), stopIntent).build())
             .setOngoing(true)
             .build()
     }
 
     private fun notificationStateLabel(status: BridgeStatus): String {
-        if (status.error != null || status.runtimeState == RuntimeState.Error) return "需要处理"
-        if (status.serverHealthy && status.webHealthy) return "服务运行中"
+        if (status.error != null || status.runtimeState == RuntimeState.Error) return getString(R.string.runtime_needs_attention)
+        if (status.serverHealthy && status.webHealthy) return getString(R.string.runtime_service_running)
         return when (status.runtimeState) {
-            RuntimeState.NotInstalled -> "需要安装引擎"
-            RuntimeState.Installing -> "正在安装引擎"
-            RuntimeState.Installed -> "服务未启动"
-            RuntimeState.Starting, RuntimeState.Running -> "正在准备服务"
-            RuntimeState.Stopping -> "正在停止服务"
-            RuntimeState.Stopped -> "服务已停止"
-            RuntimeState.Error -> "需要处理"
+            RuntimeState.NotInstalled -> getString(R.string.runtime_install_required)
+            RuntimeState.Installing -> getString(R.string.runtime_installing)
+            RuntimeState.Installed -> getString(R.string.runtime_not_started)
+            RuntimeState.Starting, RuntimeState.Running -> getString(R.string.runtime_starting)
+            RuntimeState.Stopping -> getString(R.string.runtime_stopping)
+            RuntimeState.Stopped -> getString(R.string.runtime_stopped)
+            RuntimeState.Error -> getString(R.string.runtime_needs_attention)
         }
     }
 

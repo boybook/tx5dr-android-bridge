@@ -1,0 +1,107 @@
+<resources>
+    <string name="app_name">TX-5DR</string>
+    <string name="notification_service_running">Service running</string>
+    <string name="notification_keep_alive">Keep-alive</string>
+    <string name="notification_action_open">Open</string>
+    <string name="notification_action_stop">Stop</string>
+
+    <string name="runtime_needs_attention">Needs attention</string>
+    <string name="runtime_service_running">Service running</string>
+    <string name="runtime_install_required">Engine installation required</string>
+    <string name="runtime_installing">Installing engine</string>
+    <string name="runtime_not_started">Service not started</string>
+    <string name="runtime_starting">Preparing service</string>
+    <string name="runtime_stopping">Stopping service</string>
+    <string name="runtime_stopped">Service stopped</string>
+    <string name="runtime_ready_title">Ready to use</string>
+    <string name="runtime_ready_subtitle">Background service is running. You can enter TX-5DR.</string>
+    <string name="runtime_error_subtitle">The background service encountered an error. Check diagnostics.</string>
+    <string name="runtime_install_subtitle">Download and install the Android runtime before first use.</string>
+    <string name="runtime_installing_subtitle">Downloading, verifying, and preparing the runtime.</string>
+    <string name="runtime_starting_subtitle">Starting background services and waiting for health checks.</string>
+    <string name="runtime_stopping_subtitle">Shutting down background processes.</string>
+    <string name="runtime_installed_subtitle">Runtime is installed. You can start the background service.</string>
+    <string name="runtime_preparing">Preparing</string>
+    <string name="runtime_wait">Please wait.</string>
+    <string name="runtime_error_chip">Error</string>
+    <string name="runtime_running_chip">Running</string>
+    <string name="runtime_not_installed_chip">Not installed</string>
+    <string name="runtime_installing_chip">Installing</string>
+    <string name="runtime_starting_chip">Starting</string>
+    <string name="runtime_stopping_chip">Stopping</string>
+    <string name="runtime_installed_chip">Installed</string>
+    <string name="see_diagnostics">Check diagnostics.</string>
+    <string name="first_use_install_runtime">Install the runtime before first use.</string>
+
+    <string name="action_start_service">Start service</string>
+    <string name="action_install_engine">Install engine</string>
+    <string name="action_enter_tx5dr">Enter TX-5DR</string>
+    <string name="action_stop_service">Stop service</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_diagnostics">Diagnostics</string>
+    <string name="action_update">Update</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_start">Start</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_allow">Allow</string>
+    <string name="action_go_allow">Allow in settings</string>
+
+    <string name="access_title_ready">Hotspot / LAN access</string>
+    <string name="access_title_waiting">Waiting for service</string>
+    <string name="access_fallback">Connect to the phone hotspot or same Wi-Fi to access.</string>
+    <string name="cd_copy_address">Copy address</string>
+    <string name="cd_diagnostics_settings">Diagnostics and settings</string>
+
+    <string name="radio_connection">Radio connection</string>
+    <string name="usb_audio">USB audio</string>
+    <string name="usb_serial">USB serial</string>
+    <string name="mic_permission_required">Microphone permission required</string>
+    <string name="usb_audio_auto_detect">Plug in a USB sound card to auto-detect.</string>
+    <string name="serial_auto_detect">Connect the radio CAT serial port to auto-detect.</string>
+    <string name="keep_alive_mode">Keep-alive mode</string>
+    <string name="keep_alive_subtitle">Keep background services running while the screen is off.</string>
+    <string name="battery_optimization_settings">Battery optimization settings</string>
+    <string name="go_battery_optimization_settings">Open battery optimization settings</string>
+
+    <string name="mic_permission_denied_title">Microphone permission denied</string>
+    <string name="mic_permission_allow_title">Allow microphone for USB audio</string>
+    <string name="mic_permission_notice">The service can continue, but radio audio cannot be received without this permission.</string>
+
+    <string name="install_dialog_title">Install TX-5DR engine</string>
+    <string name="install_update_dialog_title">Install / update TX-5DR engine</string>
+    <string name="install_dialog_body">This downloads the Android arm64 runtime, verifies sha256, then switches versions. Failure will not overwrite the current working version.</string>
+    <string name="release_version">Version: %1$s</string>
+    <string name="release_size">Size: %1$s</string>
+    <string name="release_preview_error">Unable to read version info: %1$s</string>
+    <string name="release_preview_loading">Reading version and size...</string>
+
+    <string name="diagnostics_settings">Diagnostics and settings</string>
+    <string name="recent_error">Recent error</string>
+    <string name="auto_enter_tx5dr">Automatically enter TX-5DR after startup</string>
+    <string name="auto_enter_tx5dr_subtitle">When off, only the background service runs.</string>
+    <string name="manifest_url">Manifest URL</string>
+    <string name="refresh_lan">Refresh LAN</string>
+    <string name="install_update">Install / update</string>
+    <string name="runtime_logs">Runtime logs</string>
+    <string name="no_logs">No logs yet</string>
+
+    <string name="input_devices">Input</string>
+    <string name="output_devices">Output</string>
+    <string name="devices">Devices</string>
+    <string name="path_format">Path: %1$s</string>
+    <string name="audio_reconnect">Reconnect audio</string>
+    <string name="serial_reconnect">Reconnect serial</string>
+    <string name="authorize_start">Authorize / start</string>
+    <string name="related_logs">Related logs</string>
+    <string name="no_device_detected">No device detected</string>
+
+    <string name="bridge_state_connected">Connected</string>
+    <string name="bridge_state_permission_required">Permission required</string>
+    <string name="bridge_state_permission_denied">Permission denied</string>
+    <string name="bridge_state_no_device">No device</string>
+    <string name="bridge_state_starting">Starting</string>
+    <string name="bridge_state_disconnected">Disconnected</string>
+    <string name="bridge_state_stopped">Stopped</string>
+    <string name="bridge_state_error">Error</string>
+    <string name="bridge_state_unknown">Unknown</string>
+</resources>

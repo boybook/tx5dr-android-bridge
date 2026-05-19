@@ -1,0 +1,107 @@
+<resources>
+    <string name="app_name">TX-5DR</string>
+    <string name="notification_service_running">サービス実行中</string>
+    <string name="notification_keep_alive">常駐中</string>
+    <string name="notification_action_open">開く</string>
+    <string name="notification_action_stop">停止</string>
+
+    <string name="runtime_needs_attention">対応が必要です</string>
+    <string name="runtime_service_running">サービス実行中</string>
+    <string name="runtime_install_required">エンジンのインストールが必要です</string>
+    <string name="runtime_installing">エンジンをインストール中</string>
+    <string name="runtime_not_started">サービス未起動</string>
+    <string name="runtime_starting">サービスを準備中</string>
+    <string name="runtime_stopping">サービスを停止中</string>
+    <string name="runtime_stopped">サービス停止済み</string>
+    <string name="runtime_ready_title">使用できます</string>
+    <string name="runtime_ready_subtitle">バックグラウンドサービスが実行中です。TX-5DR に入れます。</string>
+    <string name="runtime_error_subtitle">バックグラウンドサービスでエラーが発生しました。診断を確認してください。</string>
+    <string name="runtime_install_subtitle">初回使用前に Android ランタイムをダウンロードしてインストールします。</string>
+    <string name="runtime_installing_subtitle">ランタイムをダウンロード、検証、準備しています。</string>
+    <string name="runtime_starting_subtitle">バックグラウンドサービスを起動し、ヘルスチェックを待っています。</string>
+    <string name="runtime_stopping_subtitle">バックグラウンドプロセスを終了しています。</string>
+    <string name="runtime_installed_subtitle">ランタイムはインストール済みです。バックグラウンドサービスを開始できます。</string>
+    <string name="runtime_preparing">準備中</string>
+    <string name="runtime_wait">しばらくお待ちください。</string>
+    <string name="runtime_error_chip">異常</string>
+    <string name="runtime_running_chip">実行中</string>
+    <string name="runtime_not_installed_chip">未インストール</string>
+    <string name="runtime_installing_chip">インストール中</string>
+    <string name="runtime_starting_chip">起動中</string>
+    <string name="runtime_stopping_chip">停止中</string>
+    <string name="runtime_installed_chip">インストール済み</string>
+    <string name="see_diagnostics">診断情報を確認してください。</string>
+    <string name="first_use_install_runtime">初回使用前にランタイムをインストールしてください。</string>
+
+    <string name="action_start_service">サービス開始</string>
+    <string name="action_install_engine">エンジンをインストール</string>
+    <string name="action_enter_tx5dr">TX-5DR に入る</string>
+    <string name="action_stop_service">サービス停止</string>
+    <string name="action_retry">再試行</string>
+    <string name="action_diagnostics">診断</string>
+    <string name="action_update">更新</string>
+    <string name="action_refresh">更新</string>
+    <string name="action_start">開始</string>
+    <string name="action_cancel">キャンセル</string>
+    <string name="action_allow">許可</string>
+    <string name="action_go_allow">設定で許可</string>
+
+    <string name="access_title_ready">ホットスポット / LAN アクセス</string>
+    <string name="access_title_waiting">サービス起動待ち</string>
+    <string name="access_fallback">スマートフォンのホットスポットまたは同じ Wi-Fi からアクセスできます。</string>
+    <string name="cd_copy_address">アドレスをコピー</string>
+    <string name="cd_diagnostics_settings">診断と設定</string>
+
+    <string name="radio_connection">無線機接続</string>
+    <string name="usb_audio">USB オーディオ</string>
+    <string name="usb_serial">USB シリアル</string>
+    <string name="mic_permission_required">マイク権限が必要です</string>
+    <string name="usb_audio_auto_detect">USB サウンドカードを接続すると自動検出します。</string>
+    <string name="serial_auto_detect">無線機の CAT シリアルを接続すると自動検出します。</string>
+    <string name="keep_alive_mode">常駐モード</string>
+    <string name="keep_alive_subtitle">画面オフ中もバックグラウンドサービスを維持します。</string>
+    <string name="battery_optimization_settings">バッテリー最適化設定</string>
+    <string name="go_battery_optimization_settings">バッテリー最適化設定を開く</string>
+
+    <string name="mic_permission_denied_title">マイク権限が拒否されました</string>
+    <string name="mic_permission_allow_title">USB オーディオのためマイクを許可</string>
+    <string name="mic_permission_notice">サービスは継続できますが、この権限がないと無線機の音声を受信できません。</string>
+
+    <string name="install_dialog_title">TX-5DR エンジンをインストール</string>
+    <string name="install_update_dialog_title">TX-5DR エンジンをインストール / 更新</string>
+    <string name="install_dialog_body">Android arm64 runtime をダウンロードし、sha256 を検証してからバージョンを切り替えます。失敗しても現在使用可能なバージョンは上書きされません。</string>
+    <string name="release_version">バージョン: %1$s</string>
+    <string name="release_size">サイズ: %1$s</string>
+    <string name="release_preview_error">バージョン情報を読み取れません: %1$s</string>
+    <string name="release_preview_loading">バージョンとサイズを読み取り中...</string>
+
+    <string name="diagnostics_settings">診断と設定</string>
+    <string name="recent_error">最近のエラー</string>
+    <string name="auto_enter_tx5dr">起動後に自動で TX-5DR に入る</string>
+    <string name="auto_enter_tx5dr_subtitle">オフの場合はバックグラウンドサービスのみ実行します。</string>
+    <string name="manifest_url">Manifest URL</string>
+    <string name="refresh_lan">LAN を更新</string>
+    <string name="install_update">インストール / 更新</string>
+    <string name="runtime_logs">実行ログ</string>
+    <string name="no_logs">ログはまだありません</string>
+
+    <string name="input_devices">入力</string>
+    <string name="output_devices">出力</string>
+    <string name="devices">デバイス</string>
+    <string name="path_format">パス: %1$s</string>
+    <string name="audio_reconnect">オーディオ再接続</string>
+    <string name="serial_reconnect">シリアル再接続</string>
+    <string name="authorize_start">許可 / 開始</string>
+    <string name="related_logs">関連ログ</string>
+    <string name="no_device_detected">検出されません</string>
+
+    <string name="bridge_state_connected">接続済み</string>
+    <string name="bridge_state_permission_required">権限が必要</string>
+    <string name="bridge_state_permission_denied">権限が拒否されました</string>
+    <string name="bridge_state_no_device">未検出</string>
+    <string name="bridge_state_starting">起動中</string>
+    <string name="bridge_state_disconnected">切断済み</string>
+    <string name="bridge_state_stopped">停止済み</string>
+    <string name="bridge_state_error">異常</string>
+    <string name="bridge_state_unknown">不明</string>
+</resources>

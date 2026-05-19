@@ -127,7 +127,7 @@ object AndroidUsbAudioBridge {
     }
 
     fun markPermissionDenied() {
-        update(status.copy(state = "permission-denied", error = "麦克风权限被拒绝，USB 音频桥接无法启动"))
+        update(status.copy(state = "permission-denied", error = null))
     }
 
     fun stop() {

@@ -7,9 +7,11 @@ import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.tx5dr.bridge.BridgeStatus
+import com.tx5dr.bridge.R
 import com.tx5dr.bridge.RuntimeState
 
 internal data class StatusVisual(
@@ -26,60 +28,60 @@ internal fun statusVisual(status: BridgeStatus): StatusVisual {
     val scheme = androidx.compose.material3.MaterialTheme.colorScheme
     return when {
         status.error != null || status.runtimeState == RuntimeState.Error -> StatusVisual(
-            title = "需要处理",
-            subtitle = status.error?.takeIf { it.isNotBlank() } ?: "后台服务遇到异常，请查看诊断信息。",
-            chip = "异常",
+            title = stringResource(R.string.runtime_needs_attention),
+            subtitle = status.error?.takeIf { it.isNotBlank() } ?: stringResource(R.string.runtime_error_subtitle),
+            chip = stringResource(R.string.runtime_error_chip),
             icon = Icons.Filled.Error,
             color = scheme.error,
         )
         status.serverHealthy && status.webHealthy -> StatusVisual(
-            title = "可以开始使用",
-            subtitle = "后台服务运行中，可进入 TX-5DR。",
-            chip = "运行中",
+            title = stringResource(R.string.runtime_ready_title),
+            subtitle = stringResource(R.string.runtime_ready_subtitle),
+            chip = stringResource(R.string.runtime_running_chip),
             icon = Icons.Filled.CheckCircle,
             color = scheme.primary,
         )
         status.runtimeState == RuntimeState.NotInstalled -> StatusVisual(
-            title = "需要安装引擎",
-            subtitle = "首次使用需要下载并安装 Android 运行环境。",
-            chip = "未安装",
+            title = stringResource(R.string.runtime_install_required),
+            subtitle = stringResource(R.string.runtime_install_subtitle),
+            chip = stringResource(R.string.runtime_not_installed_chip),
             icon = Icons.Filled.RadioButtonUnchecked,
             color = scheme.primary,
         )
         status.runtimeState == RuntimeState.Installing -> StatusVisual(
-            title = "正在安装引擎",
-            subtitle = status.progress ?: "正在下载、校验并准备运行环境。",
-            chip = "安装中",
+            title = stringResource(R.string.runtime_installing),
+            subtitle = status.progress ?: stringResource(R.string.runtime_installing_subtitle),
+            chip = stringResource(R.string.runtime_installing_chip),
             icon = Icons.Filled.HourglassTop,
             color = scheme.primary,
             busy = true,
         )
         status.runtimeState == RuntimeState.Starting || status.runtimeState == RuntimeState.Running -> StatusVisual(
-            title = "正在准备服务",
-            subtitle = status.progress ?: "正在启动后台服务并等待健康检查。",
-            chip = "启动中",
+            title = stringResource(R.string.runtime_starting),
+            subtitle = status.progress ?: stringResource(R.string.runtime_starting_subtitle),
+            chip = stringResource(R.string.runtime_starting_chip),
             icon = Icons.Filled.HourglassTop,
             color = scheme.primary,
             busy = true,
         )
         status.runtimeState == RuntimeState.Stopping -> StatusVisual(
-            title = "正在停止服务",
-            subtitle = status.progress ?: "正在关闭后台进程。",
-            chip = "停止中",
+            title = stringResource(R.string.runtime_stopping),
+            subtitle = status.progress ?: stringResource(R.string.runtime_stopping_subtitle),
+            chip = stringResource(R.string.runtime_stopping_chip),
             icon = Icons.Filled.HourglassTop,
             color = scheme.primary,
             busy = true,
         )
         status.runtimeState == RuntimeState.Installed || status.runtimeState == RuntimeState.Stopped -> StatusVisual(
-            title = "服务尚未启动",
-            subtitle = "运行环境已安装，可以启动后台服务。",
-            chip = "已安装",
+            title = stringResource(R.string.runtime_not_started),
+            subtitle = stringResource(R.string.runtime_installed_subtitle),
+            chip = stringResource(R.string.runtime_installed_chip),
             icon = Icons.Filled.Warning,
             color = scheme.tertiary,
         )
         else -> StatusVisual(
-            title = "正在准备",
-            subtitle = status.progress ?: "请稍候。",
+            title = stringResource(R.string.runtime_preparing),
+            subtitle = status.progress ?: stringResource(R.string.runtime_wait),
             chip = status.runtimeState.name,
             icon = Icons.Filled.HourglassTop,
             color = scheme.primary,
@@ -88,16 +90,17 @@ internal fun statusVisual(status: BridgeStatus): StatusVisual {
     }
 }
 
+@Composable
 internal fun bridgeLabel(state: String): String = when (state) {
-    "streaming", "connected" -> "已连接"
-    "permission-required" -> "需要授权"
-    "permission-denied" -> "权限被拒绝"
-    "no-device" -> "未检测到"
-    "starting", "waiting-helper" -> "启动中"
-    "disconnected" -> "已断开"
-    "stopped" -> "已停止"
-    "error" -> "异常"
-    else -> state.ifBlank { "未知" }
+    "streaming", "connected" -> stringResource(R.string.bridge_state_connected)
+    "permission-required" -> stringResource(R.string.bridge_state_permission_required)
+    "permission-denied" -> stringResource(R.string.bridge_state_permission_denied)
+    "no-device" -> stringResource(R.string.bridge_state_no_device)
+    "starting", "waiting-helper" -> stringResource(R.string.bridge_state_starting)
+    "disconnected" -> stringResource(R.string.bridge_state_disconnected)
+    "stopped" -> stringResource(R.string.bridge_state_stopped)
+    "error" -> stringResource(R.string.bridge_state_error)
+    else -> state.ifBlank { stringResource(R.string.bridge_state_unknown) }
 }
 
 internal fun formatBytes(value: Long): String {

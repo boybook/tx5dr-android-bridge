@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -144,7 +145,7 @@ fun DashboardScreen(
                         },
                         actions = {
                             IconButton(onClick = onShowDiagnostics) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "诊断与设置")
+                                Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.cd_diagnostics_settings))
                             }
                         },
                     )
@@ -390,13 +391,13 @@ private fun HeroStatusPanel(
 ) {
     val visual = statusVisual(status)
     val title = when {
-        status.serverHealthy && status.webHealthy -> "服务运行中"
-        status.runtimeState == RuntimeState.NotInstalled -> "需要安装引擎"
-        status.runtimeState == RuntimeState.Installing -> "正在安装引擎"
-        status.runtimeState == RuntimeState.Starting || status.runtimeState == RuntimeState.Running -> "正在准备服务"
-        status.runtimeState == RuntimeState.Stopping -> "正在停止服务"
-        status.runtimeState == RuntimeState.Error || status.error != null -> "服务需要处理"
-        else -> "服务未启动"
+        status.serverHealthy && status.webHealthy -> stringResource(R.string.runtime_service_running)
+        status.runtimeState == RuntimeState.NotInstalled -> stringResource(R.string.runtime_install_required)
+        status.runtimeState == RuntimeState.Installing -> stringResource(R.string.runtime_installing)
+        status.runtimeState == RuntimeState.Starting || status.runtimeState == RuntimeState.Running -> stringResource(R.string.runtime_starting)
+        status.runtimeState == RuntimeState.Stopping -> stringResource(R.string.runtime_stopping)
+        status.runtimeState == RuntimeState.Error || status.error != null -> stringResource(R.string.runtime_needs_attention)
+        else -> stringResource(R.string.runtime_not_started)
     }
 
     Column(
@@ -414,7 +415,7 @@ private fun HeroStatusPanel(
             }
             status.runtimeState == RuntimeState.Error || status.error != null -> {
                 Text(
-                    status.error?.takeIf { it.isNotBlank() } ?: "请查看诊断信息。",
+                    status.error?.takeIf { it.isNotBlank() } ?: stringResource(R.string.see_diagnostics),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 2,
@@ -422,7 +423,7 @@ private fun HeroStatusPanel(
                 )
             }
             status.runtimeState == RuntimeState.NotInstalled -> {
-                Text("首次使用前请先安装运行环境", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.first_use_install_runtime), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 
@@ -435,7 +436,7 @@ private fun HeroStatusPanel(
                     Button(onClick = {}, enabled = false, modifier = Modifier.widthIn(min = 156.dp)) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("启动服务")
+                        Text(stringResource(R.string.action_start_service))
                     }
                     UpdateTextButton(onClick = {}, enabled = false, updateAvailable = updateAvailable)
                 }
@@ -443,30 +444,30 @@ private fun HeroStatusPanel(
                     Button(onClick = onInstallClick, modifier = Modifier.widthIn(min = 168.dp)) {
                         Icon(Icons.Filled.PowerSettingsNew, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("安装引擎")
+                        Text(stringResource(R.string.action_install_engine))
                     }
                 }
                 status.serverHealthy && status.webHealthy -> {
                     Button(onClick = onOpenWebView, modifier = Modifier.widthIn(min = 176.dp)) {
                         Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("进入 TX-5DR")
+                        Text(stringResource(R.string.action_enter_tx5dr))
                     }
-                    IconButton(onClick = onStopRuntime) { Icon(Icons.Filled.Stop, contentDescription = "停止服务") }
+                    IconButton(onClick = onStopRuntime) { Icon(Icons.Filled.Stop, contentDescription = stringResource(R.string.action_stop_service)) }
                 }
                 status.runtimeState == RuntimeState.Error || status.error != null -> {
                     Button(onClick = onStartRuntime, modifier = Modifier.widthIn(min = 144.dp)) {
                         Icon(Icons.Filled.Refresh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("重试")
+                        Text(stringResource(R.string.action_retry))
                     }
-                    TextButton(onClick = onShowDiagnostics) { Text("诊断") }
+                    TextButton(onClick = onShowDiagnostics) { Text(stringResource(R.string.action_diagnostics)) }
                 }
                 else -> {
                     Button(onClick = onStartRuntime, modifier = Modifier.widthIn(min = 156.dp)) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("启动服务")
+                        Text(stringResource(R.string.action_start_service))
                     }
                     UpdateTextButton(onClick = onInstallClick, updateAvailable = updateAvailable)
                 }
@@ -488,7 +489,7 @@ private fun UpdateTextButton(
             }
         },
     ) {
-        TextButton(onClick = onClick, enabled = enabled) { Text("更新") }
+        TextButton(onClick = onClick, enabled = enabled) { Text(stringResource(R.string.action_update)) }
     }
 }
 
@@ -508,10 +509,10 @@ private fun ServiceAccessStrip(
     ) {
         ListItem(
             leadingContent = { Icon(Icons.Filled.Lan, contentDescription = null) },
-            headlineContent = { Text(if (healthy) "热点/局域网入口" else "等待服务启动") },
+            headlineContent = { Text(if (healthy) stringResource(R.string.access_title_ready) else stringResource(R.string.access_title_waiting)) },
             supportingContent = {
                 Text(
-                    lanUrls.firstOrNull() ?: "可连接手机热点或同一 Wi-Fi 后访问",
+                    lanUrls.firstOrNull() ?: stringResource(R.string.access_fallback),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -519,7 +520,7 @@ private fun ServiceAccessStrip(
             trailingContent = {
                 if (lanUrls.isNotEmpty()) {
                     IconButton(onClick = { onCopyText(lanUrls.first()) }) {
-                        Icon(Icons.Filled.ContentCopy, contentDescription = "复制地址")
+                        Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.cd_copy_address))
                     }
                 }
             },
@@ -541,8 +542,8 @@ private fun HardwareDock(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("电台连接", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            TextButton(onClick = onRefreshBridges) { Text("刷新") }
+            Text(stringResource(R.string.radio_connection), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRefreshBridges) { Text(stringResource(R.string.action_refresh)) }
         }
         val cardShape = MaterialTheme.shapes.extraLarge
         Card(
@@ -554,27 +555,27 @@ private fun HardwareDock(
             Column {
                 HardwareListItem(
                     icon = Icons.Filled.GraphicEq,
-                    title = "USB 音频",
+                    title = stringResource(R.string.usb_audio),
                     state = audioStatus.state,
                     supporting = when {
-                        audioStatus.needsRecordAudioPermission() -> "需要允许麦克风权限"
-                        else -> audioStatus.inputDevices.firstOrNull()?.name ?: audioStatus.outputDevices.firstOrNull()?.name ?: "插入 USB 声卡后自动检测"
+                        audioStatus.needsRecordAudioPermission() -> stringResource(R.string.mic_permission_required)
+                        else -> audioStatus.inputDevices.firstOrNull()?.name ?: audioStatus.outputDevices.firstOrNull()?.name ?: stringResource(R.string.usb_audio_auto_detect)
                     },
                     onClick = onAudioClick,
                 )
                 HorizontalDivider()
                 HardwareListItem(
                     icon = Icons.Filled.Usb,
-                    title = "USB 串口",
+                    title = stringResource(R.string.usb_serial),
                     state = usbSerialState(serialStatus),
-                    supporting = serialStatus.activePath ?: serialStatus.devices.firstOrNull()?.name ?: "连接电台 CAT 串口后自动检测",
+                    supporting = serialStatus.activePath ?: serialStatus.devices.firstOrNull()?.name ?: stringResource(R.string.serial_auto_detect),
                     onClick = onSerialClick,
                 )
                 HorizontalDivider()
                 ListItem(
                     leadingContent = { Icon(Icons.Filled.BatterySaver, contentDescription = null) },
-                    headlineContent = { Text("值守模式") },
-                    supportingContent = { Text("息屏时保持后台服务运行") },
+                    headlineContent = { Text(stringResource(R.string.keep_alive_mode)) },
+                    supportingContent = { Text(stringResource(R.string.keep_alive_subtitle)) },
                     trailingContent = { Switch(checked = keepAliveEnabled, onCheckedChange = onKeepAliveChange) },
                 )
                 if (keepAliveEnabled) {
@@ -582,7 +583,7 @@ private fun HardwareDock(
                         modifier = Modifier.fillMaxWidth().padding(start = 72.dp, end = 16.dp, bottom = 16.dp),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        OutlinedButton(onClick = onOpenBatterySettings) { Text("前往电池优化设置") }
+                        OutlinedButton(onClick = onOpenBatterySettings) { Text(stringResource(R.string.go_battery_optimization_settings)) }
                     }
                 }
             }
@@ -616,20 +617,20 @@ private fun AudioPermissionNotice(
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = if (denied) "麦克风权限已拒绝" else "允许麦克风以启用 USB 音频",
+                    text = if (denied) stringResource(R.string.mic_permission_denied_title) else stringResource(R.string.mic_permission_allow_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = if (denied) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
                 )
                 Text(
-                    text = "服务可继续运行，但没有此权限无法接收电台音频。",
+                    text = stringResource(R.string.mic_permission_notice),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (denied) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Button(onClick = onAuthorizeAudio) { Text(if (denied) "去允许" else "允许") }
+            Button(onClick = onAuthorizeAudio) { Text(if (denied) stringResource(R.string.action_go_allow) else stringResource(R.string.action_allow)) }
         }
     }
 }
@@ -668,23 +669,23 @@ private fun InstallRuntimeDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Filled.PowerSettingsNew, contentDescription = null) },
-        title = { Text(if (runtimeState == RuntimeState.NotInstalled) "安装 TX-5DR 引擎" else "安装/更新 TX-5DR 引擎") },
+        title = { Text(if (runtimeState == RuntimeState.NotInstalled) stringResource(R.string.install_dialog_title) else stringResource(R.string.install_update_dialog_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("将下载 Android arm64 runtime，校验 sha256 后切换版本；失败不会覆盖当前可用版本。")
+                Text(stringResource(R.string.install_dialog_body))
                 when {
                     releasePreview != null -> {
-                        Text("版本：${releasePreview.version}")
-                        Text("大小：${formatBytes(releasePreview.sizeBytes)}")
+                        Text(stringResource(R.string.release_version, releasePreview.version))
+                        Text(stringResource(R.string.release_size, formatBytes(releasePreview.sizeBytes)))
                     }
-                    releasePreviewError != null -> Text("无法读取版本信息：$releasePreviewError", color = MaterialTheme.colorScheme.error)
-                    else -> Text("正在读取版本和体积...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    releasePreviewError != null -> Text(stringResource(R.string.release_preview_error, releasePreviewError), color = MaterialTheme.colorScheme.error)
+                    else -> Text(stringResource(R.string.release_preview_loading), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(manifestUrl, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
-        confirmButton = { Button(onClick = onConfirm) { Text("开始") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = { Button(onClick = onConfirm) { Text(stringResource(R.string.action_start)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }
 
@@ -711,12 +712,12 @@ private fun DiagnosticsSheet(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("诊断与设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.diagnostics_settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             bridgeStatus.error?.let {
                 Card(Modifier.fillMaxWidth()) {
                     ListItem(
                         leadingContent = { Icon(Icons.Filled.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                        headlineContent = { Text("最近错误") },
+                        headlineContent = { Text(stringResource(R.string.recent_error)) },
                         supportingContent = { Text(it) },
                     )
                 }
@@ -727,8 +728,8 @@ private fun DiagnosticsSheet(
                 shape = MaterialTheme.shapes.extraLarge,
             ) {
                 SettingsSwitch(
-                    title = "启动后自动进入 TX-5DR",
-                    subtitle = "关闭后仅运行后台服务。",
+                    title = stringResource(R.string.auto_enter_tx5dr),
+                    subtitle = stringResource(R.string.auto_enter_tx5dr_subtitle),
                     checked = autoOpenWebView,
                     onCheckedChange = { enabled ->
                         onAutoOpenWebViewChange(enabled)
@@ -739,19 +740,19 @@ private fun DiagnosticsSheet(
             OutlinedTextField(
                 value = manifestUrl,
                 onValueChange = onManifestUrlChange,
-                label = { Text("Manifest URL") },
+                label = { Text(stringResource(R.string.manifest_url)) },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2,
             )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onRefreshLan) { Text("刷新 LAN") }
-                OutlinedButton(onClick = onOpenBatterySettings) { Text("电池优化设置") }
-                OutlinedButton(onClick = onInstallClick) { Text("安装/更新") }
+                OutlinedButton(onClick = onRefreshLan) { Text(stringResource(R.string.refresh_lan)) }
+                OutlinedButton(onClick = onOpenBatterySettings) { Text(stringResource(R.string.battery_optimization_settings)) }
+                OutlinedButton(onClick = onInstallClick) { Text(stringResource(R.string.install_update)) }
             }
-            Text("运行日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.runtime_logs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Surface(Modifier.fillMaxWidth().height(360.dp), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.large) {
                 Text(
-                    logs.ifBlank { "暂无日志" },
+                    logs.ifBlank { stringResource(R.string.no_logs) },
                     modifier = Modifier.padding(14.dp).verticalScroll(rememberScrollState()),
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
@@ -782,14 +783,14 @@ private fun AudioDetailSheet(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("USB 音频", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.usb_audio), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             StateChip(status.state)
-            DeviceList("输入", status.inputDevices.map { it.name })
-            DeviceList("输出", status.outputDevices.map { it.name })
+            DeviceList(stringResource(R.string.input_devices), status.inputDevices.map { it.name })
+            DeviceList(stringResource(R.string.output_devices), status.outputDevices.map { it.name })
             status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onAuthorizeAudio) { Text(if (status.state == "streaming") "重连音频" else "授权/启动") }
-                OutlinedButton(onClick = onShowDiagnostics) { Text("相关日志") }
+                Button(onClick = onAuthorizeAudio) { Text(if (status.state == "streaming") stringResource(R.string.audio_reconnect) else stringResource(R.string.authorize_start)) }
+                OutlinedButton(onClick = onShowDiagnostics) { Text(stringResource(R.string.related_logs)) }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -806,14 +807,14 @@ private fun SerialDetailSheet(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("USB 串口", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.usb_serial), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             StateChip(usbSerialState(status))
-            DeviceList("设备", status.devices.map { it.name })
-            status.activePath?.let { Text("路径：$it", fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            DeviceList(stringResource(R.string.devices), status.devices.map { it.name })
+            status.activePath?.let { Text(stringResource(R.string.path_format, it), fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onStartSerial) { Text(if (status.state == "connected") "重连串口" else "授权/启动") }
-                OutlinedButton(onClick = onShowDiagnostics) { Text("相关日志") }
+                Button(onClick = onStartSerial) { Text(if (status.state == "connected") stringResource(R.string.serial_reconnect) else stringResource(R.string.authorize_start)) }
+                OutlinedButton(onClick = onShowDiagnostics) { Text(stringResource(R.string.related_logs)) }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -825,7 +826,7 @@ private fun DeviceList(title: String, values: List<String>) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(title, style = MaterialTheme.typography.labelLarge)
         if (values.isEmpty()) {
-            Text("未检测到", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.no_device_detected), color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             values.forEach { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

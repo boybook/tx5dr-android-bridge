@@ -1,0 +1,107 @@
+<resources>
+    <string name="app_name">TX-5DR</string>
+    <string name="notification_service_running">服务运行中</string>
+    <string name="notification_keep_alive">值守中</string>
+    <string name="notification_action_open">打开</string>
+    <string name="notification_action_stop">停止</string>
+
+    <string name="runtime_needs_attention">需要处理</string>
+    <string name="runtime_service_running">服务运行中</string>
+    <string name="runtime_install_required">需要安装引擎</string>
+    <string name="runtime_installing">正在安装引擎</string>
+    <string name="runtime_not_started">服务未启动</string>
+    <string name="runtime_starting">正在准备服务</string>
+    <string name="runtime_stopping">正在停止服务</string>
+    <string name="runtime_stopped">服务已停止</string>
+    <string name="runtime_ready_title">可以开始使用</string>
+    <string name="runtime_ready_subtitle">后台服务运行中，可进入 TX-5DR。</string>
+    <string name="runtime_error_subtitle">后台服务遇到异常，请查看诊断信息。</string>
+    <string name="runtime_install_subtitle">首次使用需要下载并安装 Android 运行环境。</string>
+    <string name="runtime_installing_subtitle">正在下载、校验并准备运行环境。</string>
+    <string name="runtime_starting_subtitle">正在启动后台服务并等待健康检查。</string>
+    <string name="runtime_stopping_subtitle">正在关闭后台进程。</string>
+    <string name="runtime_installed_subtitle">运行环境已安装，可以启动后台服务。</string>
+    <string name="runtime_preparing">正在准备</string>
+    <string name="runtime_wait">请稍候。</string>
+    <string name="runtime_error_chip">异常</string>
+    <string name="runtime_running_chip">运行中</string>
+    <string name="runtime_not_installed_chip">未安装</string>
+    <string name="runtime_installing_chip">安装中</string>
+    <string name="runtime_starting_chip">启动中</string>
+    <string name="runtime_stopping_chip">停止中</string>
+    <string name="runtime_installed_chip">已安装</string>
+    <string name="see_diagnostics">请查看诊断信息。</string>
+    <string name="first_use_install_runtime">首次使用前请先安装运行环境</string>
+
+    <string name="action_start_service">启动服务</string>
+    <string name="action_install_engine">安装引擎</string>
+    <string name="action_enter_tx5dr">进入 TX-5DR</string>
+    <string name="action_stop_service">停止服务</string>
+    <string name="action_retry">重试</string>
+    <string name="action_diagnostics">诊断</string>
+    <string name="action_update">更新</string>
+    <string name="action_refresh">刷新</string>
+    <string name="action_start">开始</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_allow">允许</string>
+    <string name="action_go_allow">去允许</string>
+
+    <string name="access_title_ready">热点/局域网入口</string>
+    <string name="access_title_waiting">等待服务启动</string>
+    <string name="access_fallback">可连接手机热点或同一 Wi-Fi 后访问</string>
+    <string name="cd_copy_address">复制地址</string>
+    <string name="cd_diagnostics_settings">诊断与设置</string>
+
+    <string name="radio_connection">电台连接</string>
+    <string name="usb_audio">USB 音频</string>
+    <string name="usb_serial">USB 串口</string>
+    <string name="mic_permission_required">需要允许麦克风权限</string>
+    <string name="usb_audio_auto_detect">插入 USB 声卡后自动检测</string>
+    <string name="serial_auto_detect">连接电台 CAT 串口后自动检测</string>
+    <string name="keep_alive_mode">值守模式</string>
+    <string name="keep_alive_subtitle">息屏时保持后台服务运行</string>
+    <string name="battery_optimization_settings">电池优化设置</string>
+    <string name="go_battery_optimization_settings">前往电池优化设置</string>
+
+    <string name="mic_permission_denied_title">麦克风权限已拒绝</string>
+    <string name="mic_permission_allow_title">允许麦克风以启用 USB 音频</string>
+    <string name="mic_permission_notice">服务可继续运行，但没有此权限无法接收电台音频。</string>
+
+    <string name="install_dialog_title">安装 TX-5DR 引擎</string>
+    <string name="install_update_dialog_title">安装/更新 TX-5DR 引擎</string>
+    <string name="install_dialog_body">将下载 Android arm64 runtime，校验 sha256 后切换版本；失败不会覆盖当前可用版本。</string>
+    <string name="release_version">版本：%1$s</string>
+    <string name="release_size">大小：%1$s</string>
+    <string name="release_preview_error">无法读取版本信息：%1$s</string>
+    <string name="release_preview_loading">正在读取版本和体积...</string>
+
+    <string name="diagnostics_settings">诊断与设置</string>
+    <string name="recent_error">最近错误</string>
+    <string name="auto_enter_tx5dr">启动后自动进入 TX-5DR</string>
+    <string name="auto_enter_tx5dr_subtitle">关闭后仅运行后台服务。</string>
+    <string name="manifest_url">Manifest URL</string>
+    <string name="refresh_lan">刷新 LAN</string>
+    <string name="install_update">安装/更新</string>
+    <string name="runtime_logs">运行日志</string>
+    <string name="no_logs">暂无日志</string>
+
+    <string name="input_devices">输入</string>
+    <string name="output_devices">输出</string>
+    <string name="devices">设备</string>
+    <string name="path_format">路径：%1$s</string>
+    <string name="audio_reconnect">重连音频</string>
+    <string name="serial_reconnect">重连串口</string>
+    <string name="authorize_start">授权/启动</string>
+    <string name="related_logs">相关日志</string>
+    <string name="no_device_detected">未检测到</string>
+
+    <string name="bridge_state_connected">已连接</string>
+    <string name="bridge_state_permission_required">需要授权</string>
+    <string name="bridge_state_permission_denied">权限被拒绝</string>
+    <string name="bridge_state_no_device">未检测到</string>
+    <string name="bridge_state_starting">启动中</string>
+    <string name="bridge_state_disconnected">已断开</string>
+    <string name="bridge_state_stopped">已停止</string>
+    <string name="bridge_state_error">异常</string>
+    <string name="bridge_state_unknown">未知</string>
+</resources>
