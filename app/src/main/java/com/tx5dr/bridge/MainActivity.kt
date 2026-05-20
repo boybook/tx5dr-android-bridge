@@ -87,6 +87,7 @@ class MainActivity : ComponentActivity() {
     private var pendingWebDownloadSave: PendingWebDownload? = null
     private var lastReleasePreviewUrl: String? = null
     private var lastReleasePreviewAtMs: Long = 0L
+    private var installAfterRuntimeStop = false
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = pendingFilePathCallback ?: return@registerForActivityResult
         pendingFilePathCallback = null
@@ -123,6 +124,10 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             bridgeStatus = status
             refreshAdminToken()
+            if (installAfterRuntimeStop && status.runtimeState == RuntimeState.Stopped) {
+                installAfterRuntimeStop = false
+                startInstallNow()
+            }
             if (status.serverHealthy && status.webHealthy && autoOpenWebView && !serviceOnlyMode && !webVisible && !webSuppressedForSession) {
                 openWebView()
             }
@@ -1066,11 +1071,33 @@ class MainActivity : ComponentActivity() {
 
     private fun startInstall() {
         BridgeRuntime.setManifestUrl(manifestUrl)
+        showSettingsSheet = false
+        showLogSheet = false
+        showInstallDialog = false
+        if (shouldStopBeforeInstall(bridgeStatus.runtimeState)) {
+            installAfterRuntimeStop = true
+            webSuppressedForSession = true
+            releaseWebView()
+            stopRuntime()
+            return
+        }
+        startInstallNow()
+    }
+
+    private fun startInstallNow() {
+        BridgeRuntime.setManifestUrl(manifestUrl)
         BridgeService.start(this, BridgeService.ACTION_INSTALL)
+    }
+
+    private fun shouldStopBeforeInstall(state: RuntimeState): Boolean = when (state) {
+        RuntimeState.Starting, RuntimeState.Running, RuntimeState.Stopping -> true
+        RuntimeState.NotInstalled, RuntimeState.Installing, RuntimeState.Installed, RuntimeState.Stopped, RuntimeState.Error -> false
     }
 
     private fun prepareInstallDialog() {
         BridgeRuntime.setManifestUrl(manifestUrl)
+        showSettingsSheet = false
+        showLogSheet = false
         releasePreview = null
         releasePreviewError = null
         showInstallDialog = true
