@@ -5,6 +5,12 @@
 
 package com.tx5dr.bridge.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -473,33 +479,7 @@ private fun HeroStatusPanel(
     ) {
         Icon(visual.icon, contentDescription = null, tint = visual.color, modifier = Modifier.size(44.dp))
         Text(visual.title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
-
-        when {
-            visual.busy -> {
-                Text(visual.subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val installFraction = if (status.runtimeState == RuntimeState.Installing) status.installProgress?.fraction else null
-                if (installFraction != null) {
-                    LinearProgressIndicator(
-                        progress = { installFraction },
-                        modifier = Modifier.fillMaxWidth(0.72f),
-                    )
-                } else {
-                    LinearProgressIndicator(Modifier.fillMaxWidth(0.72f))
-                }
-            }
-            status.runtimeState == RuntimeState.Error || status.error != null -> {
-                Text(
-                    status.error?.takeIf { it.isNotBlank() } ?: stringResource(R.string.see_diagnostics),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            status.runtimeState == RuntimeState.NotInstalled -> {
-                Text(stringResource(R.string.first_use_install_runtime), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        HeroStatusDetail(status = status, visual = visual)
 
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
@@ -546,6 +526,71 @@ private fun HeroStatusPanel(
                     UpdateTextButton(onClick = onInstallClick, updateAvailable = updateAvailable)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HeroStatusDetail(
+    status: BridgeStatus,
+    visual: StatusVisual,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        AnimatedVisibility(
+            visible = visual.busy,
+            enter = fadeIn() + expandVertically(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    visual.subtitle,
+                    modifier = Modifier.animateContentSize(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val installFraction = if (status.runtimeState == RuntimeState.Installing) status.installProgress?.fraction else null
+                if (installFraction != null) {
+                    LinearProgressIndicator(
+                        progress = { installFraction },
+                        modifier = Modifier.fillMaxWidth(0.72f),
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth(0.72f))
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = status.runtimeState == RuntimeState.Error || status.error != null,
+            enter = fadeIn() + expandVertically(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Text(
+                status.error?.takeIf { it.isNotBlank() } ?: stringResource(R.string.see_diagnostics),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        AnimatedVisibility(
+            visible = status.runtimeState == RuntimeState.NotInstalled,
+            enter = fadeIn() + expandVertically(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Text(
+                stringResource(R.string.first_use_install_runtime),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
