@@ -465,15 +465,6 @@ private fun HeroStatusPanel(
     updateAvailable: Boolean,
 ) {
     val visual = statusVisual(status)
-    val title = when {
-        status.serverHealthy && status.webHealthy -> stringResource(R.string.runtime_service_running)
-        status.runtimeState == RuntimeState.NotInstalled -> stringResource(R.string.runtime_install_required)
-        status.runtimeState == RuntimeState.Installing -> stringResource(R.string.runtime_installing)
-        status.runtimeState == RuntimeState.Starting || status.runtimeState == RuntimeState.Running -> stringResource(R.string.runtime_starting)
-        status.runtimeState == RuntimeState.Stopping -> stringResource(R.string.runtime_stopping)
-        status.runtimeState == RuntimeState.Error || status.error != null -> stringResource(R.string.runtime_needs_attention)
-        else -> stringResource(R.string.runtime_not_started)
-    }
 
     Column(
         modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 18.dp),
@@ -481,7 +472,7 @@ private fun HeroStatusPanel(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Icon(visual.icon, contentDescription = null, tint = visual.color, modifier = Modifier.size(44.dp))
-        Text(title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
+        Text(visual.title, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
 
         when {
             visual.busy -> {

@@ -1095,11 +1095,32 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startRuntime() {
+        bridgeStatus = bridgeStatus.copy(
+            runtimeState = RuntimeState.Starting,
+            runtimePhase = RuntimePhase.PreparingRuntime,
+            runtimeDetail = getString(R.string.runtime_starting_subtitle),
+            serverHealthy = false,
+            webHealthy = false,
+            clientToolsHealthy = false,
+            error = null,
+            progress = getString(R.string.runtime_starting_subtitle),
+            startedAtMs = null,
+        )
         BridgeRuntime.setManifestUrl(manifestUrl)
         BridgeService.start(this, BridgeService.ACTION_START_RUNTIME)
     }
 
     private fun stopRuntime() {
+        bridgeStatus = bridgeStatus.copy(
+            runtimeState = RuntimeState.Stopping,
+            runtimePhase = RuntimePhase.Stopping,
+            runtimeDetail = getString(R.string.runtime_stopping_subtitle),
+            serverHealthy = false,
+            webHealthy = false,
+            clientToolsHealthy = false,
+            error = null,
+            progress = getString(R.string.runtime_stopping_subtitle),
+        )
         BridgeService.start(this, BridgeService.ACTION_STOP_RUNTIME)
     }
 

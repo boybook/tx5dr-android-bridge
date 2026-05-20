@@ -112,7 +112,13 @@ class BridgeService : Service() {
             RuntimeState.NotInstalled -> getString(R.string.runtime_install_required)
             RuntimeState.Installing -> getString(R.string.runtime_installing)
             RuntimeState.Installed -> getString(R.string.runtime_not_started)
-            RuntimeState.Starting, RuntimeState.Running -> getString(R.string.runtime_starting)
+            RuntimeState.Starting -> getString(R.string.runtime_starting)
+            RuntimeState.Running -> when {
+                status.serverHealthy && status.webHealthy -> getString(R.string.runtime_service_running)
+                status.serverHealthy -> getString(R.string.runtime_waiting_web)
+                status.clientToolsHealthy -> getString(R.string.runtime_waiting_api)
+                else -> getString(R.string.runtime_process_running)
+            }
             RuntimeState.Stopping -> getString(R.string.runtime_stopping)
             RuntimeState.Stopped -> getString(R.string.runtime_stopped)
             RuntimeState.Error -> getString(R.string.runtime_needs_attention)
