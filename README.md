@@ -70,10 +70,11 @@ Android app (Kotlin + Compose Material 3)
   AndroidUsbAudioBridge
     - Android AudioRecord/AudioTrack route selection
     - latest-frame PCM queues to avoid accumulated latency
-    - local TCP PCM streams on 127.0.0.1:4719 and :4720
+    - Unix socket PCM streams under runtime/tx5dr-data/runtime/sockets/
+    - runtime/android-audio-devices.json for TX-5DR device enumeration
   AndroidUsbSerialBridge
     - USB Host API permission and device discovery
-    - local framed serial bridge on 127.0.0.1:4721
+    - Unix socket framed serial bridges under runtime/tx5dr-data/runtime/sockets/
 
 App private files directory
   runtime/rootfs/                 Debian 13 minbase rootfs
@@ -81,6 +82,7 @@ App private files directory
   runtime/tx5dr/current           symlink to active release
   runtime/tx5dr-data/             persistent TX-5DR data/config/log/cache
   runtime/tx5dr-data/android-dev/ virtual serial symlinks visible to Hamlib
+  runtime/tx5dr-data/runtime/     manifests, DNS, and Unix socket directory
   runtime/host-libs/              Android-side native library aliases
   runtime/proot-tmp/              PRoot temp directory
 
@@ -90,10 +92,7 @@ PRoot Debian runtime
   /etc/resolv.conf                Android-generated DNS bind mount
   127.0.0.1:4000                  TX-5DR server
   0.0.0.0:8076                    client-tools LAN web proxy/static server
-  127.0.0.1:4718                  PulseAudio native TCP protocol
-  127.0.0.1:4719                  Android audio input PCM stream
-  127.0.0.1:4720                  Android audio output PCM stream
-  127.0.0.1:4721                  Android USB serial framed bridge
+  /opt/tx5dr-data/runtime/sockets Android audio and serial bridge sockets
 ```
 
 LAN browser access uses `client-tools` as the only public entrypoint:
@@ -252,31 +251,29 @@ sleep 8
 `logs` follows these tags:
 
 ```text
-Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty NetworkAccess
+Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot serial-pty NetworkAccess
 ```
 
 ## Audio Bridge
 
-TX-5DR inside Linux still sees stable PulseAudio virtual devices. The Android side decides whether the physical route is USB audio or phone audio.
+TX-5DR inside Linux reads an Android audio manifest and opens a Unix domain socket for the selected input/output device. Android owns `AudioRecord` / `AudioTrack` routing and can expose multiple USB audio devices plus the built-in microphone/speaker.
 
 ```text
 Android AudioRecord PCM s16le/mono/48000 preferred
   -> latest-frame input queue
-  -> 127.0.0.1:4719 TCP stream
-  -> tx5dr-android-pulse-tcp tcp-to-sink inside Debian
-  -> PulseAudio TX5DRAndroidInput null sink
-  -> TX5DRAndroidUsbInput remap source
+  -> /opt/tx5dr-data/runtime/sockets/audio-input-<id>.sock
+  -> TX-5DR server Android audio backend
+  -> decoder/spectrum pipeline
 
-TX-5DR Pulse output sink monitor
-  -> tx5dr-android-pulse-tcp source-to-tcp inside Debian
-  -> 127.0.0.1:4720 TCP stream
+TX-5DR server Android audio backend
+  -> /opt/tx5dr-data/runtime/sockets/audio-output-<id>.sock
   -> latest-frame output queue
-  -> Android AudioTrack preferred output route
+  -> Android AudioTrack preferred output device
 ```
 
-The default policy is USB-first automatic routing. Users can explicitly choose USB audio, phone microphone, or phone speaker from the Android shell. Latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
+The default policy is USB-first automatic routing. Users can explicitly choose each concrete Android input/output device from the Android shell. Latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
 
-After starting the runtime and enabling audio, use the debug helper to prove Linux/Pulse can read non-empty PCM from the Android input:
+After starting the runtime and enabling audio, use the debug helper to inspect the manifest and sockets:
 
 ```bash
 ./tools/adb-debug.sh start
@@ -287,12 +284,11 @@ After starting the runtime and enabling audio, use the debug helper to prove Lin
 Manual equivalent inside PRoot:
 
 ```bash
-pactl list short sources | grep TX5DRAndroidUsbInput
-timeout 3 parec -d TX5DRAndroidUsbInput --raw --rate=48000 --format=s16le --channels=1 > /tmp/android-input.raw
-ls -lh /tmp/android-input.raw
+cat /opt/tx5dr-data/runtime/android-audio-devices.json
+ss -lx | grep tx5dr-data
 ```
 
-Then check whether TX-5DR can enumerate the Pulse/RtAudio source:
+Then check whether TX-5DR enumerates the Android audio devices:
 
 ```bash
 curl -s http://127.0.0.1:4000/api/audio/devices
@@ -306,7 +302,7 @@ Android owns the physical USB serial device through `UsbManager`. Debian sees a 
 Hamlib in PRoot
   -> /opt/tx5dr-data/android-dev/ttyUSB0
   -> tx5dr-android-serial-pty
-  -> 127.0.0.1:4721 framed protocol
+  -> /opt/tx5dr-data/runtime/sockets/serial-ttyUSB0.sock framed protocol
   -> AndroidUsbSerialBridge
   -> Android USB serial driver
   -> radio CAT/PTT serial interface

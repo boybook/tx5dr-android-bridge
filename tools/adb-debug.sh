@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ADB="${ADB:-adb}"
 PKG="com.tx5dr.bridge"
 DEBUG_ACTIVITY="$PKG/.DebugCommandActivity"
-LOG_TAGS=(Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty)
+LOG_TAGS=(Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot serial-pty)
 
 usage() {
   cat <<USAGE
@@ -28,8 +28,8 @@ Commands:
   start-usb-serial        Start Android USB serial bridge and Linux PTY helper
   stop-usb-serial         Stop Android USB serial bridge and Linux PTY helper
   dns-smoke               Check PRoot /etc/resolv.conf, DNS lookup, and HTTPS reachability
-  audio-smoke [seconds]   Record TX5DRAndroidUsbInput inside PRoot and print byte/nonzero stats
-  output-smoke [seconds]  Play a 48kHz mono tone into TX5DRAndroidOutput and print recent output stats
+  audio-smoke [seconds]   Inspect Android audio manifest and Unix sockets
+  output-smoke [seconds]  Inspect Android audio output sockets and recent logs
   start-mic               Alias for start-usb-audio
   stop-mic                Alias for stop-usb-audio
   set-manifest <url>      Save manifest URL without installing
@@ -83,7 +83,7 @@ fi
   --bind=/sys:/sys \\
   --kill-on-exit \\
   --link2symlink \\
-  /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PULSE_SERVER=tcp:127.0.0.1:4718 TX5DR_DATA_DIR=/opt/tx5dr-user/data TX5DR_LOGS_DIR=/opt/tx5dr-user/logs TX5DR_PLUGINS_DIR=/opt/tx5dr-user/plugins TX5DR_PLUGIN_DATA_DIR=/opt/tx5dr-user/plugin-data TX5DR_CONFIG_DIR=/opt/tx5dr-data/config TX5DR_CACHE_DIR=/opt/tx5dr-data/cache /bin/bash -lc "$inner"
+  /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TX5DR_RUNTIME_FLAVOR=android-bridge TX5DR_ANDROID_AUDIO_DEVICES_FILE=/opt/tx5dr-data/runtime/android-audio-devices.json TX5DR_ANDROID_SERIAL_DEVICES_FILE=/opt/tx5dr-data/runtime/android-serial-devices.json TX5DR_DATA_DIR=/opt/tx5dr-user/data TX5DR_LOGS_DIR=/opt/tx5dr-user/logs TX5DR_PLUGINS_DIR=/opt/tx5dr-user/plugins TX5DR_PLUGIN_DATA_DIR=/opt/tx5dr-user/plugin-data TX5DR_CONFIG_DIR=/opt/tx5dr-data/config TX5DR_CACHE_DIR=/opt/tx5dr-data/cache /bin/bash -lc "$inner"
 SCRIPT
 }
 
@@ -162,107 +162,18 @@ INNER
     rm -f "$tmp_script"
     ;;
   audio-smoke)
-    seconds="${2:-3}"
-    tmp_inner="$(mktemp)"
-    cat > "$tmp_inner" <<'INNER'
-#!/bin/bash
-set -e
-seconds="${1:-3}"
-echo SOURCES
-pactl list short sources
-echo RECORD
-set +e
-timeout "$seconds" parec -d TX5DRAndroidUsbInput --raw --rate=48000 --format=s16le --channels=1 > /tmp/android-usb-input.raw
-rc=$?
-set -e
-if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ]; then
-  exit "$rc"
-fi
-wc -c /tmp/android-usb-input.raw
-ls -lh /tmp/android-usb-input.raw
-INNER
-    "$ADB" push "$tmp_inner" /data/local/tmp/tx5dr-audio-smoke-inner.sh >/dev/null
-    "$ADB" shell "run-as $PKG sh -c 'mkdir -p files/runtime/tx5dr-data/runtime && cat /data/local/tmp/tx5dr-audio-smoke-inner.sh > files/runtime/tx5dr-data/runtime/audio-smoke-inner.sh && chmod 700 files/runtime/tx5dr-data/runtime/audio-smoke-inner.sh'"
-    rm -f "$tmp_inner"
     tmp_script="$(mktemp)"
-    make_proot_script "/bin/bash /opt/tx5dr-data/runtime/audio-smoke-inner.sh $seconds" "$tmp_script"
+    make_proot_script "cat /opt/tx5dr-data/runtime/android-audio-devices.json; echo; ss -lx | grep tx5dr-data || true" "$tmp_script"
     write_and_run_proot_script "$tmp_script"
     rm -f "$tmp_script"
-    tmp_raw="$(mktemp)"
-    "$ADB" exec-out run-as "$PKG" cat files/runtime/rootfs/tmp/android-usb-input.raw > "$tmp_raw"
-    python3 - "$tmp_raw" "$seconds" <<'PY'
-import struct
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-seconds = float(sys.argv[2])
-data = path.read_bytes()
-samples = struct.unpack('<' + 'h' * (len(data) // 2), data[:len(data) // 2 * 2])
-nonzero = sum(1 for sample in samples if sample)
-peak = max((abs(sample) for sample in samples), default=0)
-expected = int(seconds * 48000 * 2)
-ratio = (len(data) / expected) if expected else 0
-window_samples = 4800
-silent_windows = 0
-low_windows = 0
-total_windows = 0
-for start in range(0, len(samples), window_samples):
-    window = samples[start:start + window_samples]
-    if not window:
-        continue
-    total_windows += 1
-    window_nonzero = sum(1 for sample in window if sample)
-    window_peak = max((abs(sample) for sample in window), default=0)
-    if window_nonzero == 0:
-        silent_windows += 1
-    elif window_peak < 8:
-        low_windows += 1
-print(
-    "PCM stats: "
-    f"bytes={len(data)} expected={expected} ratio={ratio:.3f} "
-    f"samples={len(samples)} nonzero={nonzero} peak={peak} "
-    f"windows100ms={total_windows} silentWindows={silent_windows} lowPeakWindows={low_windows}"
-)
-PY
-    rm -f "$tmp_raw"
     ;;
   output-smoke)
-    seconds="${2:-3}"
-    tmp_inner="$(mktemp)"
-    cat > "$tmp_inner" <<'INNER'
-#!/bin/bash
-set -e
-seconds="${1:-3}"
-echo SINKS
-pactl list short sinks
-echo TONE
-python3 - "$seconds" > /tmp/android-output-tone.raw <<'PY'
-import math
-import struct
-import sys
-
-seconds = float(sys.argv[1])
-rate = 48000
-freq = 1000.0
-amp = 12000
-samples = int(seconds * rate)
-for i in range(samples):
-    sample = int(math.sin(2.0 * math.pi * freq * i / rate) * amp)
-    sys.stdout.buffer.write(struct.pack("<h", sample))
-PY
-wc -c /tmp/android-output-tone.raw
-echo PLAY
-pacat --raw --rate=48000 --format=s16le --channels=1 -d TX5DRAndroidOutput /tmp/android-output-tone.raw
-INNER
-    "$ADB" push "$tmp_inner" /data/local/tmp/tx5dr-output-smoke-inner.sh >/dev/null
-    "$ADB" shell "run-as $PKG sh -c 'mkdir -p files/runtime/tx5dr-data/runtime && cat /data/local/tmp/tx5dr-output-smoke-inner.sh > files/runtime/tx5dr-data/runtime/output-smoke-inner.sh && chmod 700 files/runtime/tx5dr-data/runtime/output-smoke-inner.sh'"
-    rm -f "$tmp_inner"
     tmp_script="$(mktemp)"
-    make_proot_script "/bin/bash /opt/tx5dr-data/runtime/output-smoke-inner.sh $seconds" "$tmp_script"
+    make_proot_script "cat /opt/tx5dr-data/runtime/android-audio-devices.json; echo; ss -lx | grep tx5dr-data || true" "$tmp_script"
     write_and_run_proot_script "$tmp_script"
     rm -f "$tmp_script"
     echo "Recent output bridge stats:"
-    "$ADB" logcat -d -v time -s "${LOG_TAGS[@]}" | grep -E "USB audio output stats|Linux Pulse output capture connected|USB audio output bridge failed" | tail -20 || true
+    "$ADB" logcat -d -v time -s "${LOG_TAGS[@]}" | grep -E "Android audio output stats|Android output backend connected|Android audio output client ended|USB audio output bridge failed" | tail -20 || true
     ;;
   set-manifest)
     [[ -n "${2:-}" ]] || { echo "set-manifest requires a URL" >&2; exit 2; }

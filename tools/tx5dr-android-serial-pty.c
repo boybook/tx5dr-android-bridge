@@ -2,7 +2,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <netdb.h>
 #include <pty.h>
 #include <signal.h>
 #include <stdint.h>
@@ -12,6 +11,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -23,24 +23,21 @@
 static volatile sig_atomic_t running = 1;
 static void on_signal(int sig) { (void)sig; running = 0; }
 
-static int connect_tcp(const char *host, const char *port) {
-  struct addrinfo hints;
-  struct addrinfo *result = NULL;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  int rc = getaddrinfo(host, port, &hints, &result);
-  if (rc != 0) return -1;
-  int fd = -1;
-  for (struct addrinfo *rp = result; rp; rp = rp->ai_next) {
-    fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0) continue;
-    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+static int connect_unix_socket(const char *path) {
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  if (strlen(path) >= sizeof(addr.sun_path)) {
     close(fd);
-    fd = -1;
+    errno = ENAMETOOLONG;
+    return -1;
   }
-  freeaddrinfo(result);
-  return fd;
+  strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) return fd;
+  close(fd);
+  return -1;
 }
 
 static int write_all(int fd, const void *buf, size_t len) {
@@ -115,8 +112,8 @@ static void maybe_send_config(int sock, int pty, struct termios *last, int *have
 }
 
 int main(int argc, char **argv) {
-  if (argc != 4) {
-    fprintf(stderr, "usage: %s <symlink-path> <host> <port>\n", argv[0]);
+  if (argc != 3) {
+    fprintf(stderr, "usage: %s <symlink-path> <socket-path>\n", argv[0]);
     return 1;
   }
   signal(SIGTERM, on_signal);
@@ -138,12 +135,12 @@ int main(int argc, char **argv) {
 
   int sock = -1;
   for (int i = 0; i < 80 && running; i++) {
-    sock = connect_tcp(argv[2], argv[3]);
+    sock = connect_unix_socket(argv[2]);
     if (sock >= 0) break;
     usleep(250000);
   }
   if (sock < 0) {
-    fprintf(stderr, "failed to connect serial bridge\n");
+    fprintf(stderr, "failed to connect serial bridge socket: %s\n", argv[2]);
     return 4;
   }
   send_frame(sock, FRAME_STATUS, "connected", 9);

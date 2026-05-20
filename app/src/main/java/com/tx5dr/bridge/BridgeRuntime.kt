@@ -48,6 +48,7 @@ object BridgeRuntime {
         paths.ensureDirs()
         migrateExternalUserDataIfNeeded()
         NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile, paths.resolvConfFile)
+        AndroidUsbAudioBridge.init(app, paths.androidAudioDevicesFile)
         AndroidUsbAudioBridge.startWatchingDevices(app)
         AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
         registerUsbHotplugReceiver()
@@ -261,21 +262,7 @@ object BridgeRuntime {
 
     fun startLinuxAudioSide() {
         executor.execute {
-            try {
-                if (audioBridgeProcess?.isAlive == true) return@execute
-                ensureBaseRuntime()
-                ensureHostRuntimeEnvironment()
-                val cmd = buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "HOME=/root", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "PULSE_SERVER=tcp:127.0.0.1:4718", "/bin/bash", "-lc", MIC_SCRIPT)
-                val p = newProotProcess(cmd).redirectErrorStream(true).start()
-                audioBridgeProcess = p
-                pipeOutput(p, "mic-linux")
-                LogBus.i(TAG, "Started Linux audio bridge side")
-                monitorAuxiliaryProcess("Linux audio bridge side", p) {
-                    if (audioBridgeProcess == p) audioBridgeProcess = null
-                }
-            } catch (error: Throwable) {
-                LogBus.e(TAG, "Linux mic side failed", error)
-            }
+            LogBus.i(TAG, "Linux audio bridge side is handled by TX-5DR Android Unix socket backend")
         }
     }
 
@@ -289,7 +276,7 @@ object BridgeRuntime {
                 audioBridgeProcess?.destroy()
                 audioBridgeProcess = null
                 ensureHostRuntimeEnvironment()
-                val cmd = buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "PULSE_SERVER=tcp:127.0.0.1:4718", "/bin/bash", "-lc", "pkill tx5dr-android-pulse-tcp || true; pkill tx5dr-android-mic-injector || true; pactl list short modules | awk '/TX5DRAndroid|AndroidSink|AndroidMic/ {print \\$1}' | xargs -r -n1 pactl unload-module || true")
+                val cmd = buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-lc", "true")
                 newProotProcess(cmd).redirectErrorStream(true).start().waitFor(5, TimeUnit.SECONDS)
             } catch (error: Throwable) {
                 LogBus.e(TAG, "Stop Linux audio side failed", error)
@@ -461,7 +448,7 @@ object BridgeRuntime {
     private fun buildRuntimeCommand(): List<String> {
         val script = """
 set -e
-mkdir -p /opt/tx5dr-data/config /opt/tx5dr-data/cache /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /opt/tx5dr-user/data /opt/tx5dr-user/logs /opt/tx5dr-user/plugins /opt/tx5dr-user/plugin-data /tmp/pulse
+mkdir -p /opt/tx5dr-data/config /opt/tx5dr-data/cache /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /opt/tx5dr-user/data /opt/tx5dr-user/logs /opt/tx5dr-user/plugins /opt/tx5dr-user/plugin-data
 export HOME=/root
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export NODE_ENV=production
@@ -471,34 +458,14 @@ export TX5DR_RUNTIME_FLAVOR=android-bridge
 export TX5DR_SERVER_HOST=127.0.0.1
 export TX5DR_NETWORK_ACCESS_FILE=/opt/tx5dr-data/runtime/android-network-access.json
 export TX5DR_ANDROID_SERIAL_DEVICES_FILE=/opt/tx5dr-data/runtime/android-serial-devices.json
+export TX5DR_ANDROID_AUDIO_DEVICES_FILE=/opt/tx5dr-data/runtime/android-audio-devices.json
 export TX5DR_DATA_DIR=/opt/tx5dr-user/data
 export TX5DR_LOGS_DIR=/opt/tx5dr-user/logs
 export TX5DR_PLUGINS_DIR=/opt/tx5dr-user/plugins
 export TX5DR_PLUGIN_DATA_DIR=/opt/tx5dr-user/plugin-data
 export TX5DR_CONFIG_DIR=/opt/tx5dr-data/config
 export TX5DR_CACHE_DIR=/opt/tx5dr-data/cache
-export PULSE_SERVER=tcp:127.0.0.1:4718
 export TX5DR_RTAUDIO_API=alsa
-export ALSA_CONFIG_PATH=/opt/tx5dr-data/runtime/asoundrc
-cat > "${'$'}ALSA_CONFIG_PATH" <<'ASOUNDRC'
-pcm.pulse {
-    type pulse
-    server "tcp:127.0.0.1:4718"
-}
-ctl.pulse {
-    type pulse
-    server "tcp:127.0.0.1:4718"
-}
-pcm.!default {
-    type pulse
-    server "tcp:127.0.0.1:4718"
-}
-ctl.!default {
-    type pulse
-    server "tcp:127.0.0.1:4718"
-}
-ASOUNDRC
-pulseaudio --exit-idle-time=-1 --daemonize=yes --log-target=stderr --load='module-native-protocol-tcp auth-ip-acl=127.0.0.1 port=4718 auth-anonymous=1' || true
 cd /opt/tx5dr/current
 node /opt/tx5dr/current/packages/server/dist/scripts/server-launcher.js /opt/tx5dr/current/packages/server/dist/index.js 2>&1 | sed -u 's/^/[server] /' &
 server_pid=$!
@@ -526,15 +493,15 @@ wait -n ${'$'}server_pid ${'$'}client_pid
             serialPtyProcesses.remove(device.path)
             val script = """
 set -e
-mkdir -p /opt/tx5dr-data/android-dev /opt/tx5dr-data/logs
-exec tx5dr-android-serial-pty ${device.path} 127.0.0.1 ${device.bridgePort}
+mkdir -p /opt/tx5dr-data/android-dev /opt/tx5dr-data/logs /opt/tx5dr-data/runtime/sockets
+exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
 """.trimIndent()
             val process = newProotProcess(buildProotBaseCommand() + listOf("/usr/bin/env", "-i", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "/bin/bash", "-lc", script))
                 .redirectErrorStream(true)
                 .start()
             serialPtyProcesses[device.path] = process
             pipeOutput(process, "serial-pty-${device.virtualIndex}")
-            LogBus.i(TAG, "Started Linux serial PTY helper for ${device.path} on ${device.bridgePort}")
+            LogBus.i(TAG, "Started Linux serial PTY helper for ${device.path} on ${device.bridgeSocket}")
             monitorAuxiliaryProcess("Linux serial PTY helper ${device.path}", process) {
                 if (serialPtyProcesses[device.path] == process) serialPtyProcesses.remove(device.path)
             }
@@ -984,7 +951,9 @@ exec tx5dr-android-serial-pty ${device.path} 127.0.0.1 ${device.bridgePort}
         val externalMigrationMarker = File(dataDir, "runtime/external-data-migration.json")
         val androidNetworkAccessFile = File(dataDir, "runtime/android-network-access.json")
         val androidSerialDevicesFile = File(dataDir, "runtime/android-serial-devices.json")
+        val androidAudioDevicesFile = File(dataDir, "runtime/android-audio-devices.json")
         val resolvConfFile = File(dataDir, "runtime/resolv.conf")
+        val socketsDir = File(dataDir, "runtime/sockets")
         val txDir = File(workDir, "tx5dr")
         val releasesDir = File(txDir, "releases")
         val currentLink = File(txDir, "current")
@@ -998,7 +967,7 @@ exec tx5dr-android-serial-pty ${device.path} 127.0.0.1 ${device.bridgePort}
         fun ensureDirs() {
             listOf(
                 workDir, cacheDir, hostLibDir, prootTmpDir, rootfsDir, dataDir, releasesDir,
-                externalUserRootDir, externalUserDataDir, externalLogsDir, externalPluginsDir, externalPluginDataDir,
+                externalUserRootDir, externalUserDataDir, externalLogsDir, externalPluginsDir, externalPluginDataDir, socketsDir,
             ).forEach { it.mkdirs() }
             androidNetworkAccessFile.parentFile?.mkdirs()
             externalMigrationMarker.parentFile?.mkdirs()
@@ -1018,39 +987,8 @@ exec tx5dr-android-serial-pty ${device.path} 127.0.0.1 ${device.bridgePort}
         )
     }
 
-    private const val MIC_SCRIPT = """
-set -u
-export PULSE_SERVER=tcp:127.0.0.1:4718
-for i in $(seq 1 80); do
-  pactl info >/dev/null 2>&1 && break
-  sleep 0.25
-done
-pactl info >/dev/null
-pactl list short modules | awk '/TX5DRAndroid|AndroidSink|AndroidMic/ {print ${'$'}1}' | xargs -r -n1 pactl unload-module || true
-input_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidInput rate=48000 channels=1 format=s16le)
-input_source_module=$(pactl load-module module-remap-source master=TX5DRAndroidInput.monitor source_name=TX5DRAndroidUsbInput rate=48000 channels=1)
-output_sink_module=$(pactl load-module module-null-sink sink_name=TX5DRAndroidOutput rate=48000 channels=1 format=s16le)
-echo "pulse bridge modules: input_sink=${'$'}input_sink_module input_source=${'$'}input_source_module output_sink=${'$'}output_sink_module"
-pactl set-default-source TX5DRAndroidUsbInput
-pactl set-default-sink TX5DRAndroidOutput
-echo "pulse bridge info:"
-pactl info
-echo "pulse bridge sources:"
-pactl list short sources
-echo "pulse bridge sinks:"
-pactl list short sinks
-tx5dr-android-pulse-tcp tcp-to-sink 127.0.0.1 4719 TX5DRAndroidInput 2>&1 | sed -u 's/^/[audio-input] /' &
-input_pid=$!
-tx5dr-android-pulse-tcp source-to-tcp 127.0.0.1 4720 TX5DRAndroidOutput.monitor 2>&1 | sed -u 's/^/[audio-output] /' &
-output_pid=$!
-trap 'kill ${'$'}input_pid ${'$'}output_pid 2>/dev/null || true; wait || true; exit 0' TERM INT
-wait -n ${'$'}input_pid ${'$'}output_pid
-"""
-
     private val ROOTFS_REQUIRED_FILES = listOf(
         "usr/bin/node",
-        "usr/local/bin/tx5dr-android-mic-injector",
-        "usr/local/bin/tx5dr-android-pulse-tcp",
         "usr/local/bin/tx5dr-android-serial-pty",
     )
 

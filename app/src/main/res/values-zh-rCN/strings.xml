@@ -80,7 +80,7 @@
     <string name="phone_speaker_notice">手机扬声器适合监听或测试；电台发射音频仍建议使用 USB 音频。</string>
     <string name="serial_auto_detect">连接电台 CAT 串口后自动检测</string>
     <string name="serial_mapped_count">已映射 %1$d 个串口</string>
-    <string name="serial_bridge_port_format">桥接端口：%1$d</string>
+    <string name="serial_bridge_socket_format">桥接 Socket：%1$s</string>
     <string name="copy_serial_path">复制串口路径</string>
     <string name="keep_alive_mode">值守模式</string>
     <string name="keep_alive_subtitle">息屏时保持后台服务运行</string>

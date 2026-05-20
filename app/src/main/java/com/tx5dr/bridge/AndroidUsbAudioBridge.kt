@@ -16,8 +16,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import java.net.InetAddress
-import java.net.ServerSocket
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import java.util.ArrayDeque
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -29,12 +30,11 @@ object AudioRoute {
     const val USB = "usb"
     const val BUILTIN_MIC = "builtinMic"
     const val BUILTIN_SPEAKER = "builtinSpeaker"
+    const val DEVICE_PREFIX = "device:"
 }
 
 object AndroidUsbAudioBridge {
     private const val TAG = "AudioBridge"
-    private const val INPUT_PORT = 4719
-    private const val OUTPUT_PORT = 4720
     private const val STATS_INTERVAL_MS = 5000L
     private const val BUFFER_TARGET_MS = 100
     private const val QUEUE_CAPACITY_CHUNKS = 2
@@ -50,9 +50,14 @@ object AndroidUsbAudioBridge {
     @Volatile private var running = false
     private var inputThread: Thread? = null
     private var outputThread: Thread? = null
-    private var inputServer: ServerSocket? = null
-    private var outputServer: ServerSocket? = null
+    private val sessions = mutableMapOf<String, AudioSocketSession>()
+    private var devicesFile: File? = null
     @Volatile private var deviceCallbackRegistered = false
+
+    fun init(context: Context, targetFile: File) {
+        devicesFile = targetFile
+        refreshDevices(context)
+    }
 
     fun addListener(listener: (UsbAudioStatus) -> Unit) {
         listeners.add(listener)
@@ -69,12 +74,12 @@ object AndroidUsbAudioBridge {
 
     fun refreshDevices(context: Context): UsbAudioStatus {
         val manager = context.applicationContext.getSystemService(AudioManager::class.java)
-        val inputs = manager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
+        val inputs = uniqueBridgeDevices(manager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
             .filter { it.isSupportedInputDevice() && it.isSource }
-            .map { it.toBridgeDevice("input") }
-        val outputs = manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
+            .map { it.toBridgeDevice("input") })
+        val outputs = uniqueBridgeDevices(manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
             .filter { it.isSupportedOutputDevice() && it.isSink }
-            .map { it.toBridgeDevice("output") }
+            .map { it.toBridgeDevice("output") })
         val selectedInputRoute = getSelectedInputRoute()
         val selectedOutputRoute = getSelectedOutputRoute()
         val nextState = when {
@@ -92,6 +97,7 @@ object AndroidUsbAudioBridge {
                 error = null,
             )
         )
+        writeDevicesFile(devicesFile ?: BridgeRuntime.paths.androidAudioDevicesFile, inputs, outputs)
         return status
     }
 
@@ -133,20 +139,20 @@ object AndroidUsbAudioBridge {
             update(refreshed.copy(state = if (refreshed.state == "permission-denied") "permission-denied" else "permission-required", error = null))
             return false
         }
-        val inputSelection = selectInputDevice(context)
-        val outputSelection = selectOutputDevice(context)
-        if (inputSelection.device == null || outputSelection.device == null) {
+        val inputs = currentInputDevices(context)
+        val outputs = currentOutputDevices(context)
+        if (inputs.isEmpty() || outputs.isEmpty()) {
             update(
                 refreshed.copy(
                     state = "no-device",
                     activeInputDevice = null,
                     activeOutputDevice = null,
-                    error = unavailableRouteMessage(inputSelection, outputSelection),
+                    error = "No supported Android audio input or output device",
                 )
             )
             return false
         }
-        start(context, inputSelection, outputSelection)
+        start(context, null, null)
         return true
     }
 
@@ -162,31 +168,32 @@ object AndroidUsbAudioBridge {
         }
         if (running) return
         val refreshed = refreshDevices(app)
-        val inputSelection = preparedInput ?: selectInputDevice(app)
-        val outputSelection = preparedOutput ?: selectOutputDevice(app)
-        if (inputSelection.device == null || outputSelection.device == null) {
+        val inputs = currentInputDevices(app)
+        val outputs = currentOutputDevices(app)
+        if (inputs.isEmpty() || outputs.isEmpty()) {
             update(
                 refreshed.copy(
                     state = "no-device",
                     activeInputDevice = null,
                     activeOutputDevice = null,
-                    error = unavailableRouteMessage(inputSelection, outputSelection),
+                    error = "No supported Android audio input or output device",
                 )
             )
             return
         }
         running = true
+        val activeInput = preferredInputBridgeDevice(refreshed)
+        val activeOutput = preferredOutputBridgeDevice(refreshed)
         update(
             status.copy(
                 state = "starting",
-                activeInputDevice = inputSelection.device.toBridgeDevice("input"),
-                activeOutputDevice = outputSelection.device.toBridgeDevice("output"),
+                activeInputDevice = activeInput,
+                activeOutputDevice = activeOutput,
                 error = null,
             )
         )
-        inputThread = Thread { inputLoop(app, inputSelection) }.also { it.name = "tx5dr-audio-input"; it.start() }
-        outputThread = Thread { outputLoop(app, outputSelection) }.also { it.name = "tx5dr-audio-output"; it.start() }
-        BridgeRuntime.startLinuxAudioSide()
+        startAudioSessions(app, inputs, outputs)
+        update(status.copy(state = "streaming"))
     }
 
     fun markPermissionDenied() {
@@ -199,8 +206,9 @@ object AndroidUsbAudioBridge {
 
     private fun stop(stopLinuxSide: Boolean) {
         running = false
-        try { inputServer?.close() } catch (_: Throwable) {}
-        try { outputServer?.close() } catch (_: Throwable) {}
+        val activeSessions = sessions.values.toList()
+        sessions.clear()
+        activeSessions.forEach { it.stop() }
         if (stopLinuxSide) BridgeRuntime.stopLinuxAudioSide()
         inputThread?.join(1500)
         outputThread?.join(1500)
@@ -247,11 +255,40 @@ object AndroidUsbAudioBridge {
         }.also { it.name = "tx5dr-audio-route-restart"; it.start() }
     }
 
+    private fun startAudioSessions(context: Context, inputs: List<AudioDeviceInfo>, outputs: List<AudioDeviceInfo>) {
+        val desiredKeys = (inputs.map { deviceKey("input", it.id) } + outputs.map { deviceKey("output", it.id) }).toSet()
+        sessions.filterKeys { it !in desiredKeys }.values.forEach { it.stop() }
+        sessions.keys.removeAll { it !in desiredKeys }
+        inputs.forEach { device ->
+            val key = deviceKey("input", device.id)
+            if (sessions[key]?.isAlive == true) return@forEach
+            val bridgeDevice = device.toBridgeDevice("input")
+            AudioSocketSession(bridgeDevice).also { session ->
+                sessions[key] = session
+                session.thread = Thread { inputLoop(context, device, bridgeDevice, session) }.also { thread ->
+                    thread.name = "tx5dr-audio-input-${device.id}"
+                    thread.start()
+                }
+            }
+        }
+        outputs.forEach { device ->
+            val key = deviceKey("output", device.id)
+            if (sessions[key]?.isAlive == true) return@forEach
+            val bridgeDevice = device.toBridgeDevice("output")
+            AudioSocketSession(bridgeDevice).also { session ->
+                sessions[key] = session
+                session.thread = Thread { outputLoop(context, device, bridgeDevice, session) }.also { thread ->
+                    thread.name = "tx5dr-audio-output-${device.id}"
+                    thread.start()
+                }
+            }
+        }
+    }
+
     @SuppressLint("MissingPermission")
-    private fun inputLoop(context: Context, selection: AudioDeviceSelection) {
+    private fun inputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: UsbAudioDevice, session: AudioSocketSession) {
         var recorder: AudioRecord? = null
         try {
-            val device = selection.device ?: error("Selected input audio route is unavailable")
             val formatAndBuffer = chooseRecordFormat(device)
             val format = AudioFormat.Builder()
                 .setSampleRate(formatAndBuffer.sampleRate)
@@ -262,58 +299,64 @@ object AndroidUsbAudioBridge {
             recorder = recordBuild.recorder
             if (Build.VERSION.SDK_INT >= 23) recorder.preferredDevice = device
             require(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord failed to initialize" }
-            ServerSocket(INPUT_PORT, 1, InetAddress.getByName("127.0.0.1")).use { server ->
-                inputServer = server
-                LogBus.i(TAG, "Audio input waiting on 127.0.0.1:$INPUT_PORT selectedRoute=${selection.route} activeDevice=${device.describe()} source=${sourceName(recordBuild.audioSource)} rate=${formatAndBuffer.sampleRate} buffer=${formatAndBuffer.bufferSize}")
-                server.accept().use { socket ->
-                    socket.tcpNoDelay = true
-                    socket.sendBufferSize = formatAndBuffer.bufferSize * 4
-                    LogBus.i(TAG, "Linux Pulse input injector connected")
-                    val queue = LatestPcmQueue(QUEUE_CAPACITY_CHUNKS)
-                    val connected = AtomicBoolean(true)
-                    val captureError = AtomicReference<Throwable?>(null)
-                    val stats = InputStats(formatAndBuffer.sampleRate, formatAndBuffer.bufferSize, queue)
-                    val captureThread = Thread {
-                        val buffer = ByteArray(formatAndBuffer.bufferSize)
-                        var sequence = 0L
-                        try {
-                            recorder.startRecording()
-                            while (running && connected.get() && !Thread.currentThread().isInterrupted) {
-                                val n = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
-                                if (n > 0) {
-                                    stats.recordCaptured(buffer, n)
-                                    queue.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
-                                } else {
-                                    stats.recordReadError()
-                                }
-                                stats.logIfDue("USB audio input stats")
-                            }
-                        } catch (error: Throwable) {
-                            captureError.set(error)
-                        } finally {
-                            queue.close()
-                        }
-                    }.also { it.name = "tx5dr-usb-audio-input-capture"; it.start() }
-
-                    update(status.copy(state = "streaming"))
-                    val out = socket.getOutputStream()
+            AndroidUnixSocketServer(androidSocketFile(bridgeDevice.socketPath)).use { server ->
+                session.server = server
+                LogBus.i(TAG, "Audio input waiting on ${bridgeDevice.socketPath} activeDevice=${device.describe()} source=${sourceName(recordBuild.audioSource)} rate=${formatAndBuffer.sampleRate} buffer=${formatAndBuffer.bufferSize}")
+                while (running && session.running) {
                     try {
-                        while (running && connected.get() && !socket.isClosed) {
-                            val chunk = queue.takeLatest(500) ?: continue
-                            val ageMs = System.currentTimeMillis() - chunk.createdAtMs
-                            val beforeWrite = System.nanoTime()
-                            out.write(chunk.bytes, 0, chunk.length)
-                            out.flush()
-                            val writeMs = elapsedMsSince(beforeWrite)
-                            stats.recordWritten(chunk.length, ageMs, writeMs)
-                            stats.logIfDue("USB audio input stats")
+                        server.accept().use { socket ->
+                            LogBus.i(TAG, "TX-5DR Android input backend connected: ${bridgeDevice.name}")
+                            val queue = LatestPcmQueue(QUEUE_CAPACITY_CHUNKS)
+                            val connected = AtomicBoolean(true)
+                            val captureError = AtomicReference<Throwable?>(null)
+                            val stats = InputStats(formatAndBuffer.sampleRate, formatAndBuffer.bufferSize, queue)
+                            val captureThread = Thread {
+                                val buffer = ByteArray(formatAndBuffer.bufferSize)
+                                var sequence = 0L
+                                try {
+                                    recorder.startRecording()
+                                    while (running && session.running && connected.get() && !Thread.currentThread().isInterrupted) {
+                                        val n = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                                        if (n > 0) {
+                                            stats.recordCaptured(buffer, n)
+                                            queue.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
+                                        } else {
+                                            stats.recordReadError()
+                                        }
+                                        stats.logIfDue("Android audio input stats")
+                                    }
+                                } catch (error: Throwable) {
+                                    captureError.set(error)
+                                } finally {
+                                    queue.close()
+                                }
+                            }.also { it.name = "tx5dr-android-audio-input-capture-${device.id}"; it.start() }
+
+                            update(status.copy(state = "streaming"))
+                            val out = socket.getOutputStream()
+                            try {
+                                while (running && session.running && connected.get()) {
+                                    val chunk = queue.takeLatest(500) ?: continue
+                                    val ageMs = System.currentTimeMillis() - chunk.createdAtMs
+                                    val beforeWrite = System.nanoTime()
+                                    out.write(chunk.bytes, 0, chunk.length)
+                                    out.flush()
+                                    val writeMs = elapsedMsSince(beforeWrite)
+                                    stats.recordWritten(chunk.length, ageMs, writeMs)
+                                    stats.logIfDue("Android audio input stats")
+                                }
+                            } finally {
+                                connected.set(false)
+                                queue.close()
+                                try { recorder.stop() } catch (_: Throwable) {}
+                                try { socket.close() } catch (_: Throwable) {}
+                                captureThread.join(1000)
+                                captureError.get()?.let { throw it }
+                                LogBus.i(TAG, "TX-5DR Android input backend disconnected: ${bridgeDevice.name}")
+                            }
                         }
-                    } finally {
-                        connected.set(false)
-                        queue.close()
-                        try { socket.close() } catch (_: Throwable) {}
-                        captureThread.join(1000)
-                        captureError.get()?.let { throw it }
+                    } catch (error: Throwable) {
+                        if (running && session.running) LogBus.w(TAG, "Android audio input client ended for ${bridgeDevice.name}: ${error.message}")
                     }
                 }
             }
@@ -325,14 +368,13 @@ object AndroidUsbAudioBridge {
         } finally {
             try { recorder?.stop() } catch (_: Throwable) {}
             recorder?.release()
-            inputServer = null
+            session.server = null
         }
     }
 
-    private fun outputLoop(context: Context, selection: AudioDeviceSelection) {
+    private fun outputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: UsbAudioDevice, session: AudioSocketSession) {
         var track: AudioTrack? = null
         try {
-            val device = selection.device ?: error("Selected output audio route is unavailable")
             val rate = choosePlaybackRate(device)
             val minBuffer = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val bufferSize = maxOf(minBuffer, rate * BUFFER_TARGET_MS / 1000 * 2)
@@ -356,100 +398,106 @@ object AndroidUsbAudioBridge {
             track = trackBuilder.build()
             if (Build.VERSION.SDK_INT >= 23) track.preferredDevice = device
             require(track.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack failed to initialize" }
-            ServerSocket(OUTPUT_PORT, 1, InetAddress.getByName("127.0.0.1")).use { server ->
-                outputServer = server
-                LogBus.i(TAG, "Audio output waiting on 127.0.0.1:$OUTPUT_PORT selectedRoute=${selection.route} activeDevice=${device.describe()} rate=$rate buffer=$bufferSize")
-                server.accept().use { socket ->
-                    socket.tcpNoDelay = true
-                    socket.receiveBufferSize = bufferSize * 4
-                    LogBus.i(TAG, "Linux Pulse output capture connected")
-                    val queue = LatestPcmQueue(QUEUE_CAPACITY_CHUNKS)
-                    val connected = AtomicBoolean(true)
-                    val readerError = AtomicReference<Throwable?>(null)
-                    val stats = OutputStats(rate, bufferSize, queue)
-                    val readerThread = Thread {
-                        val buffer = ByteArray(bufferSize)
-                        var sequence = 0L
-                        try {
-                            val input = socket.getInputStream()
-                            while (running && connected.get() && !Thread.currentThread().isInterrupted) {
-                                val n = input.read(buffer)
-                                if (n <= 0) break
-                                stats.recordSocketRead(n)
-                                queue.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
-                                stats.logIfDue("USB audio output stats")
-                            }
-                        } catch (error: Throwable) {
-                            if (running && connected.get()) readerError.set(error)
-                        } finally {
-                            queue.close()
-                        }
-                    }.also { it.name = "tx5dr-usb-audio-output-reader"; it.start() }
-
-                    var active = false
-                    var silentSinceMs: Long? = null
-                    var consecutiveZeroWrites = 0
+            AndroidUnixSocketServer(androidSocketFile(bridgeDevice.socketPath)).use { server ->
+                session.server = server
+                LogBus.i(TAG, "Audio output waiting on ${bridgeDevice.socketPath} activeDevice=${device.describe()} rate=$rate buffer=$bufferSize")
+                while (running && session.running) {
                     try {
-                        while (running && connected.get() && !socket.isClosed) {
-                            val chunk = queue.takeLatest(500) ?: continue
-                            val now = System.currentTimeMillis()
-                            val ageMs = now - chunk.createdAtMs
-                            if (ageMs > STALE_OUTPUT_CHUNK_MS) {
-                                stats.recordDroppedStale(chunk.length, ageMs)
-                                stats.logIfDue("USB audio output stats")
-                                continue
-                            }
-                            stats.recordChunkAge(ageMs)
-                            if (chunk.peak <= SILENCE_PEAK_THRESHOLD) {
-                                stats.recordSilence(chunk.length)
-                                if (active) {
-                                    val started = silentSinceMs ?: now.also { silentSinceMs = it }
-                                    if (now - started >= SILENCE_FLUSH_MS) {
+                        server.accept().use { socket ->
+                            LogBus.i(TAG, "TX-5DR Android output backend connected: ${bridgeDevice.name}")
+                            val queue = LatestPcmQueue(QUEUE_CAPACITY_CHUNKS)
+                            val connected = AtomicBoolean(true)
+                            val readerError = AtomicReference<Throwable?>(null)
+                            val stats = OutputStats(rate, bufferSize, queue)
+                            val readerThread = Thread {
+                                val buffer = ByteArray(bufferSize)
+                                var sequence = 0L
+                                try {
+                                    val input = socket.getInputStream()
+                                    while (running && session.running && connected.get() && !Thread.currentThread().isInterrupted) {
+                                        val n = input.read(buffer)
+                                        if (n <= 0) break
+                                        stats.recordSocketRead(n)
+                                        queue.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
+                                        stats.logIfDue("Android audio output stats")
+                                    }
+                                } catch (error: Throwable) {
+                                    if (running && connected.get()) readerError.set(error)
+                                } finally {
+                                    queue.close()
+                                }
+                            }.also { it.name = "tx5dr-android-audio-output-reader-${device.id}"; it.start() }
+
+                            var active = false
+                            var silentSinceMs: Long? = null
+                            var consecutiveZeroWrites = 0
+                            try {
+                                while (running && session.running && connected.get()) {
+                                    val chunk = queue.takeLatest(500) ?: continue
+                                    val now = System.currentTimeMillis()
+                                    val ageMs = now - chunk.createdAtMs
+                                    if (ageMs > STALE_OUTPUT_CHUNK_MS) {
+                                        stats.recordDroppedStale(chunk.length, ageMs)
+                                        stats.logIfDue("Android audio output stats")
+                                        continue
+                                    }
+                                    stats.recordChunkAge(ageMs)
+                                    if (chunk.peak <= SILENCE_PEAK_THRESHOLD) {
+                                        stats.recordSilence(chunk.length)
+                                        if (active) {
+                                            val started = silentSinceMs ?: now.also { silentSinceMs = it }
+                                            if (now - started >= SILENCE_FLUSH_MS) {
+                                                pauseFlush(track)
+                                                active = false
+                                                consecutiveZeroWrites = 0
+                                                stats.recordFlush()
+                                            }
+                                        }
+                                        stats.logIfDue("Android audio output stats")
+                                        continue
+                                    }
+
+                                    silentSinceMs = null
+                                    if (!active) {
                                         pauseFlush(track)
-                                        active = false
+                                        track.play()
+                                        active = true
                                         consecutiveZeroWrites = 0
                                         stats.recordFlush()
                                     }
+
+                                    val beforeWrite = System.nanoTime()
+                                    val written = track.write(chunk.bytes, 0, chunk.length, AudioTrack.WRITE_NON_BLOCKING)
+                                    val writeMs = elapsedMsSince(beforeWrite)
+                                    if (written > 0) {
+                                        consecutiveZeroWrites = 0
+                                        if (written < chunk.length) stats.recordPartialWrite(chunk.length - written)
+                                        stats.recordWrite(written, chunk.peak, ageMs, writeMs)
+                                    } else {
+                                        consecutiveZeroWrites += 1
+                                        stats.recordZeroWrite(writeMs)
+                                    }
+                                    if (writeMs > SLOW_OUTPUT_WRITE_MS || consecutiveZeroWrites >= 3) {
+                                        pauseFlush(track)
+                                        active = false
+                                        silentSinceMs = null
+                                        consecutiveZeroWrites = 0
+                                        stats.recordFlush()
+                                    }
+                                    stats.logIfDue("Android audio output stats")
                                 }
-                                stats.logIfDue("USB audio output stats")
-                                continue
-                            }
-
-                            silentSinceMs = null
-                            if (!active) {
+                            } finally {
+                                connected.set(false)
+                                queue.close()
                                 pauseFlush(track)
-                                track.play()
-                                active = true
-                                consecutiveZeroWrites = 0
-                                stats.recordFlush()
+                                try { socket.close() } catch (_: Throwable) {}
+                                readerThread.join(1000)
+                                readerError.get()?.let { throw it }
+                                LogBus.i(TAG, "TX-5DR Android output backend disconnected: ${bridgeDevice.name}")
                             }
-
-                            val beforeWrite = System.nanoTime()
-                            val written = track.write(chunk.bytes, 0, chunk.length, AudioTrack.WRITE_NON_BLOCKING)
-                            val writeMs = elapsedMsSince(beforeWrite)
-                            if (written > 0) {
-                                consecutiveZeroWrites = 0
-                                if (written < chunk.length) stats.recordPartialWrite(chunk.length - written)
-                                stats.recordWrite(written, chunk.peak, ageMs, writeMs)
-                            } else {
-                                consecutiveZeroWrites += 1
-                                stats.recordZeroWrite(writeMs)
-                            }
-                            if (writeMs > SLOW_OUTPUT_WRITE_MS || consecutiveZeroWrites >= 3) {
-                                pauseFlush(track)
-                                active = false
-                                silentSinceMs = null
-                                consecutiveZeroWrites = 0
-                                stats.recordFlush()
-                            }
-                            stats.logIfDue("USB audio output stats")
                         }
-                    } finally {
-                        connected.set(false)
-                        queue.close()
-                        try { socket.close() } catch (_: Throwable) {}
-                        readerThread.join(1000)
-                        readerError.get()?.let { throw it }
+                    } catch (error: Throwable) {
+                        if (running && session.running) LogBus.w(TAG, "Android audio output client ended for ${bridgeDevice.name}: ${error.message}")
                     }
                 }
             }
@@ -461,7 +509,7 @@ object AndroidUsbAudioBridge {
         } finally {
             try { track?.pause() } catch (_: Throwable) {}
             track?.release()
-            outputServer = null
+            session.server = null
         }
     }
 
@@ -472,12 +520,12 @@ object AndroidUsbAudioBridge {
 
     private fun selectInputDevice(context: Context): AudioDeviceSelection {
         val route = getSelectedInputRoute()
-        val devices = context.applicationContext
-            .getSystemService(AudioManager::class.java)
-            ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            .orEmpty()
-            .filter { it.isSupportedInputDevice() && it.isSource }
+        val devices = currentInputDevices(context)
         val device = when (route) {
+            route.takeIf { it.startsWith(AudioRoute.DEVICE_PREFIX) } -> {
+                val id = route.removePrefix(AudioRoute.DEVICE_PREFIX).toIntOrNull()
+                devices.firstOrNull { it.id == id }
+            }
             AudioRoute.USB -> devices.firstOrNull { it.isUsbAudioDevice() }
             AudioRoute.BUILTIN_MIC -> devices.firstOrNull { it.isBuiltinMicDevice() }
             else -> devices.firstOrNull { it.isUsbAudioDevice() } ?: devices.firstOrNull { it.isBuiltinMicDevice() }
@@ -487,18 +535,30 @@ object AndroidUsbAudioBridge {
 
     private fun selectOutputDevice(context: Context): AudioDeviceSelection {
         val route = getSelectedOutputRoute()
-        val devices = context.applicationContext
-            .getSystemService(AudioManager::class.java)
-            ?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .orEmpty()
-            .filter { it.isSupportedOutputDevice() && it.isSink }
+        val devices = currentOutputDevices(context)
         val device = when (route) {
+            route.takeIf { it.startsWith(AudioRoute.DEVICE_PREFIX) } -> {
+                val id = route.removePrefix(AudioRoute.DEVICE_PREFIX).toIntOrNull()
+                devices.firstOrNull { it.id == id }
+            }
             AudioRoute.USB -> devices.firstOrNull { it.isUsbAudioDevice() }
             AudioRoute.BUILTIN_SPEAKER -> devices.firstOrNull { it.isBuiltinSpeakerDevice() }
             else -> devices.firstOrNull { it.isUsbAudioDevice() } ?: devices.firstOrNull { it.isBuiltinSpeakerDevice() }
         }
         return AudioDeviceSelection(route, device)
     }
+
+    private fun currentInputDevices(context: Context): List<AudioDeviceInfo> =
+        context.applicationContext.getSystemService(AudioManager::class.java)
+            ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .orEmpty()
+            .filter { it.isSupportedInputDevice() && it.isSource }
+
+    private fun currentOutputDevices(context: Context): List<AudioDeviceInfo> =
+        context.applicationContext.getSystemService(AudioManager::class.java)
+            ?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .orEmpty()
+            .filter { it.isSupportedOutputDevice() && it.isSink }
 
     private fun chooseRecordFormat(device: AudioDeviceInfo?): AudioFormatChoice {
         val rates = device?.sampleRates?.takeIf { it.isNotEmpty() } ?: sampleRates
@@ -539,7 +599,86 @@ object AndroidUsbAudioBridge {
         name = productName?.toString()?.takeIf { it.isNotBlank() } ?: fallbackDeviceName(),
         sampleRates = sampleRates.toList(),
         channelCounts = channelCounts.toList(),
+        socketPath = "/opt/tx5dr-data/runtime/sockets/audio-$direction-$id.sock",
     )
+
+    private fun uniqueBridgeDevices(devices: List<UsbAudioDevice>): List<UsbAudioDevice> {
+        val counts = mutableMapOf<String, Int>()
+        return devices.map { device ->
+            val base = "[Android] ${device.name}"
+            val count = (counts[base] ?: 0) + 1
+            counts[base] = count
+            device.copy(name = if (count == 1) base else "$base #$count")
+        }
+    }
+
+    private fun deviceKey(direction: String, id: Int): String = "$direction:$id"
+
+    private fun androidSocketFile(prootPath: String): File =
+        File(BridgeRuntime.paths.socketsDir, prootPath.substringAfterLast('/'))
+
+    private fun preferredInputBridgeDevice(status: UsbAudioStatus): UsbAudioDevice? {
+        val route = status.selectedInputRoute
+        if (route.startsWith(AudioRoute.DEVICE_PREFIX)) {
+            val id = route.removePrefix(AudioRoute.DEVICE_PREFIX).toIntOrNull()
+            return status.inputDevices.firstOrNull { it.id == id }
+        }
+        return when (route) {
+            AudioRoute.USB -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
+            AudioRoute.BUILTIN_MIC -> status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
+            else -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB } ?: status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
+        }
+    }
+
+    private fun preferredOutputBridgeDevice(status: UsbAudioStatus): UsbAudioDevice? {
+        val route = status.selectedOutputRoute
+        if (route.startsWith(AudioRoute.DEVICE_PREFIX)) {
+            val id = route.removePrefix(AudioRoute.DEVICE_PREFIX).toIntOrNull()
+            return status.outputDevices.firstOrNull { it.id == id }
+        }
+        return when (route) {
+            AudioRoute.USB -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
+            AudioRoute.BUILTIN_SPEAKER -> status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
+            else -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB } ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
+        }
+    }
+
+    private fun writeDevicesFile(target: File, inputs: List<UsbAudioDevice>, outputs: List<UsbAudioDevice>) {
+        val inputDefault = preferredInputBridgeDevice(status.copy(inputDevices = inputs))
+        val outputDefault = preferredOutputBridgeDevice(status.copy(outputDevices = outputs))
+        fun toJson(device: UsbAudioDevice, isDefault: Boolean) = JSONObject()
+            .put("id", "android-${device.direction}-${device.id}")
+            .put("androidDeviceId", device.id)
+            .put("name", device.name)
+            .put("direction", device.direction)
+            .put("kind", device.kind)
+            .put("type", device.type)
+            .put("channels", 1)
+            .put("sampleRate", preferredSampleRate(device.sampleRates))
+            .put("sampleRates", JSONArray(device.sampleRates.ifEmpty { sampleRates.toList() }))
+            .put("format", "s16le")
+            .put("socketPath", device.socketPath)
+            .put("available", true)
+            .put("isDefault", isDefault)
+        val root = JSONObject()
+            .put("updatedAt", System.currentTimeMillis())
+            .put("socketDir", "/opt/tx5dr-data/runtime/sockets")
+            .put("format", "s16le")
+            .put("channels", 1)
+        val inputArray = JSONArray()
+        inputs.forEach { inputArray.put(toJson(it, it.id == inputDefault?.id)) }
+        val outputArray = JSONArray()
+        outputs.forEach { outputArray.put(toJson(it, it.id == outputDefault?.id)) }
+        root.put("inputDevices", inputArray)
+        root.put("outputDevices", outputArray)
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.writeText(root.toString(2))
+        }.onFailure { error -> LogBus.w(TAG, "Failed to write audio devices file: ${error.message}") }
+    }
+
+    private fun preferredSampleRate(rates: List<Int>): Int =
+        sampleRates.firstOrNull { it in rates }.let { it ?: rates.firstOrNull() ?: 48000 }
 
     private fun AudioDeviceInfo.fallbackDeviceName(): String = when {
         isBuiltinMicDevice() -> "Phone microphone"
@@ -604,12 +743,12 @@ object AndroidUsbAudioBridge {
 
     private fun normalizeInputRoute(route: String): String = when (route) {
         AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_MIC -> route
-        else -> AudioRoute.AUTO
+        else -> if (route.startsWith(AudioRoute.DEVICE_PREFIX)) route else AudioRoute.AUTO
     }
 
     private fun normalizeOutputRoute(route: String): String = when (route) {
         AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_SPEAKER -> route
-        else -> AudioRoute.AUTO
+        else -> if (route.startsWith(AudioRoute.DEVICE_PREFIX)) route else AudioRoute.AUTO
     }
 
     private fun sourceName(source: Int): String = when (source) {
@@ -647,6 +786,19 @@ object AndroidUsbAudioBridge {
     private data class AudioDeviceSelection(val route: String, val device: AudioDeviceInfo?)
 
     private data class AudioRecordBuild(val recorder: AudioRecord, val audioSource: Int)
+
+    private class AudioSocketSession(val device: UsbAudioDevice) {
+        @Volatile var running = true
+        @Volatile var server: AndroidUnixSocketServer? = null
+        @Volatile var thread: Thread? = null
+        val isAlive: Boolean get() = running && thread?.isAlive == true
+
+        fun stop() {
+            running = false
+            runCatching { server?.close() }
+            if (Thread.currentThread() != thread) thread?.join(1500)
+        }
+    }
 
     private data class PcmChunk(
         val bytes: ByteArray,
@@ -850,6 +1002,7 @@ data class UsbAudioDevice(
     val name: String,
     val sampleRates: List<Int>,
     val channelCounts: List<Int>,
+    val socketPath: String,
 )
 
 data class UsbAudioStatus(

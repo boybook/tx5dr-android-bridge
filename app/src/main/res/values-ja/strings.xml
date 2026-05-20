@@ -80,7 +80,7 @@
     <string name="phone_speaker_notice">スマートフォンのスピーカーはモニターやテスト向けです。無線機への送信音声には USB オーディオを推奨します。</string>
     <string name="serial_auto_detect">無線機の CAT シリアルを接続すると自動検出します。</string>
     <string name="serial_mapped_count">%1$d 個のシリアルをマッピング済み</string>
-    <string name="serial_bridge_port_format">ブリッジポート：%1$d</string>
+    <string name="serial_bridge_socket_format">ブリッジソケット：%1$s</string>
     <string name="copy_serial_path">シリアルパスをコピー</string>
     <string name="keep_alive_mode">常駐モード</string>
     <string name="keep_alive_subtitle">画面オフ中もバックグラウンドサービスを維持します。</string>

@@ -18,16 +18,12 @@ import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
-import java.net.InetAddress
-import java.net.ServerSocket
-import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 object AndroidUsbSerialBridge {
     private const val TAG = "UsbSerialBridge"
     private const val ACTION_USB_PERMISSION = "com.tx5dr.bridge.USB_PERMISSION"
-    private const val BASE_BRIDGE_PORT = 4721
     private const val READ_TIMEOUT_MS = 200
     private const val WRITE_TIMEOUT_MS = 2000
     private const val FRAME_DATA = 1
@@ -183,7 +179,7 @@ object AndroidUsbSerialBridge {
             selectedPort.setParameters(9600, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             val session = SerialSession(candidate.device, selectedPort, connection)
             portErrors.remove(candidate.device.virtualIndex)
-            LogBus.i(TAG, "Starting USB serial bridge ${candidate.device.path} on 127.0.0.1:${candidate.device.bridgePort}")
+            LogBus.i(TAG, "Starting USB serial bridge ${candidate.device.path} on ${candidate.device.bridgeSocket}")
             session
         } catch (error: Throwable) {
             try { candidate.port.close() } catch (_: Throwable) {}
@@ -211,9 +207,9 @@ object AndroidUsbSerialBridge {
 
     private fun serverLoop(session: SerialSession) {
         try {
-            ServerSocket(session.device.bridgePort, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            AndroidUnixSocketServer(androidSocketFile(session.device.bridgeSocket)).use { server ->
                 session.serverSocket = server
-                LogBus.i(TAG, "USB serial bridge waiting on 127.0.0.1:${session.device.bridgePort} for ${session.device.path}")
+                LogBus.i(TAG, "USB serial bridge waiting on ${session.device.bridgeSocket} for ${session.device.path}")
                 updateFromCurrentDevices("waiting-helper", null)
                 server.accept().use { socket ->
                     session.clientSocket = socket
@@ -224,18 +220,16 @@ object AndroidUsbSerialBridge {
                     val output = DataOutputStream(socket.getOutputStream())
                     session.readThread = thread(name = "tx5dr-usb-serial-read-${session.device.virtualIndex}") {
                         val buffer = ByteArray(4096)
-                        while (session.running && !socket.isClosed) {
+                        while (session.running) {
                             try {
                                 val n = session.port.read(buffer, READ_TIMEOUT_MS)
                                 if (n > 0) writeFrame(output, FRAME_DATA, buffer.copyOf(n))
-                            } catch (_: java.net.SocketException) {
-                                break
                             } catch (error: Throwable) {
                                 if (session.running) LogBus.w(TAG, "USB serial read failed for ${session.device.path}: ${error.message}")
                             }
                         }
                     }
-                    while (session.running && !socket.isClosed) {
+                    while (session.running) {
                         val type = input.read()
                         if (type < 0) break
                         val length = input.readInt()
@@ -316,7 +310,6 @@ object AndroidUsbSerialBridge {
                 val device = driver.device
                 val virtualIndex = virtualIndexFor(device, portNum)
                 val session = sessions[virtualIndex]
-                val bridgePort = BASE_BRIDGE_PORT + virtualIndex
                 SerialPortCandidate(
                     driver = driver,
                     port = port,
@@ -326,8 +319,8 @@ object AndroidUsbSerialBridge {
                         productId = device.productId,
                         portNum = portNum,
                         virtualIndex = virtualIndex,
-                        bridgePort = bridgePort,
                         path = "/opt/tx5dr-data/android-dev/ttyUSB$virtualIndex",
+                        bridgeSocket = "/opt/tx5dr-data/runtime/sockets/serial-ttyUSB$virtualIndex.sock",
                         name = buildString {
                             append(device.productName ?: device.deviceName ?: "USB Serial")
                             append(" #$portNum")
@@ -393,7 +386,7 @@ object AndroidUsbSerialBridge {
     private fun writeDevicesFile(target: File, devices: List<AndroidSerialDevice>, bridgeRunning: Boolean) {
         val root = JSONObject()
             .put("updatedAt", System.currentTimeMillis())
-            .put("bridgePort", BASE_BRIDGE_PORT)
+            .put("socketDir", "/opt/tx5dr-data/runtime/sockets")
             .put("running", bridgeRunning)
         val arr = JSONArray()
         devices.forEach { d ->
@@ -409,7 +402,7 @@ object AndroidUsbSerialBridge {
                 .put("granted", d.granted)
                 .put("active", d.active)
                 .put("connected", d.connected)
-                .put("bridgePort", d.bridgePort)
+                .put("bridgeSocket", d.bridgeSocket)
                 .put("error", d.error ?: JSONObject.NULL))
         }
         root.put("ports", arr)
@@ -420,6 +413,9 @@ object AndroidUsbSerialBridge {
             LogBus.w(TAG, "Failed to write serial devices file: ${error.message}")
         }
     }
+
+    private fun androidSocketFile(prootPath: String): File =
+        File(BridgeRuntime.paths.socketsDir, prootPath.substringAfterLast('/'))
 
     private fun registerReceiver(context: Context) {
         try {
@@ -452,8 +448,8 @@ object AndroidUsbSerialBridge {
     ) {
         @Volatile var running = true
         @Volatile var connected = false
-        @Volatile var serverSocket: ServerSocket? = null
-        @Volatile var clientSocket: Socket? = null
+        @Volatile var serverSocket: AndroidUnixSocketServer? = null
+        @Volatile var clientSocket: android.net.LocalSocket? = null
         @Volatile var serverThread: Thread? = null
         @Volatile var readThread: Thread? = null
         val isAlive: Boolean get() = running && serverThread?.isAlive == true
@@ -476,8 +472,8 @@ data class AndroidSerialDevice(
     val productId: Int,
     val portNum: Int,
     val virtualIndex: Int,
-    val bridgePort: Int,
     val path: String,
+    val bridgeSocket: String,
     val name: String,
     val granted: Boolean,
     val active: Boolean = false,

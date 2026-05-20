@@ -80,7 +80,7 @@
     <string name="phone_speaker_notice">Phone speaker is best for monitoring or testing; USB audio is still recommended for radio transmit audio.</string>
     <string name="serial_auto_detect">Connect the radio CAT serial port to auto-detect.</string>
     <string name="serial_mapped_count">%1$d serial ports mapped</string>
-    <string name="serial_bridge_port_format">Bridge port: %1$d</string>
+    <string name="serial_bridge_socket_format">Bridge socket: %1$s</string>
     <string name="copy_serial_path">Copy serial path</string>
     <string name="keep_alive_mode">Keep-alive mode</string>
     <string name="keep_alive_subtitle">Keep background services running while the screen is off.</string>

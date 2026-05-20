@@ -70,7 +70,7 @@ class DebugCommandActivity : Activity() {
                 BridgeRuntime.stopLinuxSerialSide()
             }
             ACTION_STATUS -> {
-                LogBus.i(TAG, "Debug status requested; logcat tags: Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot mic-linux serial-pty")
+                LogBus.i(TAG, "Debug status requested; logcat tags: Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot serial-pty")
             }
             else -> LogBus.w(TAG, "Unknown debug action: ${action.ifBlank { "<empty>" }}")
         }

@@ -1148,6 +1148,7 @@ private fun AudioDetailSheet(
                 activeText = stringResource(R.string.active_input_format, displayAudioDeviceName(status.activeInputDevice)),
                 selectedRoute = status.selectedInputRoute,
                 routes = listOf(AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_MIC),
+                devices = status.inputDevices,
                 onSelect = onSetInputRoute,
             )
             AudioRouteSection(
@@ -1155,6 +1156,7 @@ private fun AudioDetailSheet(
                 activeText = stringResource(R.string.active_output_format, displayAudioDeviceName(status.activeOutputDevice)),
                 selectedRoute = status.selectedOutputRoute,
                 routes = listOf(AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_SPEAKER),
+                devices = status.outputDevices,
                 onSelect = onSetOutputRoute,
             )
             if (usesBuiltinAudio(status)) {
@@ -1187,6 +1189,7 @@ private fun AudioRouteSection(
     activeText: String,
     selectedRoute: String,
     routes: List<String>,
+    devices: List<UsbAudioDevice>,
     onSelect: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1203,6 +1206,18 @@ private fun AudioRouteSection(
                 ) {
                     Text(audioRouteSegmentLabel(route), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            devices.forEach { device ->
+                val route = "${AudioRoute.DEVICE_PREFIX}${device.id}"
+                AssistChip(
+                    onClick = { onSelect(route) },
+                    label = { Text(displayAudioDeviceName(device), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = if (selectedRoute == route) {
+                        { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else null,
+                )
             }
         }
     }
@@ -1245,7 +1260,7 @@ private fun SerialDeviceList(status: UsbSerialStatus, onCopyText: (String) -> Un
                     supportingContent = {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(stringResource(R.string.path_format, device.path), fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(stringResource(R.string.serial_bridge_port_format, device.bridgePort), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.serial_bridge_socket_format, device.bridgeSocket), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis) }
                         }
                     },
@@ -1314,14 +1329,22 @@ private fun usesBuiltinAudio(status: UsbAudioStatus): Boolean =
 private fun preferredInputDevice(status: UsbAudioStatus): UsbAudioDevice? = when (status.selectedInputRoute) {
     AudioRoute.USB -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
     AudioRoute.BUILTIN_MIC -> status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
-    else -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
+    else -> status.selectedInputRoute.takeIf { it.startsWith(AudioRoute.DEVICE_PREFIX) }
+        ?.removePrefix(AudioRoute.DEVICE_PREFIX)
+        ?.toIntOrNull()
+        ?.let { id -> status.inputDevices.firstOrNull { it.id == id } }
+        ?: status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
         ?: status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
 }
 
 private fun preferredOutputDevice(status: UsbAudioStatus): UsbAudioDevice? = when (status.selectedOutputRoute) {
     AudioRoute.USB -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
     AudioRoute.BUILTIN_SPEAKER -> status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
-    else -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
+    else -> status.selectedOutputRoute.takeIf { it.startsWith(AudioRoute.DEVICE_PREFIX) }
+        ?.removePrefix(AudioRoute.DEVICE_PREFIX)
+        ?.toIntOrNull()
+        ?.let { id -> status.outputDevices.firstOrNull { it.id == id } }
+        ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
         ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
 }
 
