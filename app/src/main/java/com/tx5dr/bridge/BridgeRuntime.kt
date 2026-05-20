@@ -997,6 +997,4 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
     const val PREF_AUTO_OPEN_WEBVIEW = "autoOpenWebView"
     const val PREF_SERVICE_ONLY_MODE = "serviceOnlyMode"
     const val PREF_KEEP_ALIVE_ENABLED = "keepAliveEnabled"
-    const val PREF_AUDIO_INPUT_ROUTE = "audioInputRoute"
-    const val PREF_AUDIO_OUTPUT_ROUTE = "audioOutputRoute"
 }

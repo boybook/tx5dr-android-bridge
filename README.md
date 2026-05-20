@@ -17,7 +17,7 @@ This repository contains the Android shell and bridge layer only. The TX-5DR ser
 - Embedded WebView entrypoint for `http://127.0.0.1:8076` with local admin-token injection.
 - LAN and phone-hotspot access through `client-tools` on port `8076`.
 - Android WebView notification bridge for TX-5DR system reminders.
-- Android audio route bridge with automatic USB-first behavior and manual phone mic/speaker fallback.
+- Android audio device bridge that exposes all supported Android inputs/outputs to TX-5DR.
 - USB serial bridge for radio CAT/PTT through a Linux PTY visible inside PRoot.
 - Foreground service, optional keep-alive wake lock, diagnostics logs, and ADB debug helpers.
 
@@ -68,7 +68,7 @@ Android app (Kotlin + Compose Material 3)
     - PRoot resolv.conf generation from Android DNS
     - runtime/android-network-access.json for Node services
   AndroidUsbAudioBridge
-    - Android AudioRecord/AudioTrack route selection
+    - Android AudioRecord/AudioTrack Unix socket endpoints
     - latest-frame PCM queues to avoid accumulated latency
     - Unix socket PCM streams under runtime/tx5dr-data/runtime/sockets/
     - runtime/android-audio-devices.json for TX-5DR device enumeration
@@ -256,7 +256,7 @@ Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot serial-pty NetworkA
 
 ## Audio Bridge
 
-TX-5DR inside Linux reads an Android audio manifest and opens a Unix domain socket for the selected input/output device. Android owns `AudioRecord` / `AudioTrack` routing and can expose multiple USB audio devices plus the built-in microphone/speaker.
+TX-5DR inside Linux reads an Android audio manifest and opens a Unix domain socket for the selected input/output device. Android exposes multiple USB audio devices plus the built-in microphone/speaker as explicit TX-5DR devices.
 
 ```text
 Android AudioRecord PCM s16le/mono/48000 preferred
@@ -271,7 +271,7 @@ TX-5DR server Android audio backend
   -> Android AudioTrack preferred output device
 ```
 
-The default policy is USB-first automatic routing. Users can explicitly choose each concrete Android input/output device from the Android shell. Latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
+The manifest marks a USB-first default only for unconfigured or legacy profiles. Normal device selection happens inside the TX-5DR web audio settings; the Android shell only exposes device endpoints and shows whether a socket is currently in use. `AudioRecord` / `AudioTrack` are created lazily when TX-5DR connects to a socket, so idle devices do not hold Android audio resources. Latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
 
 After starting the runtime and enabling audio, use the debug helper to inspect the manifest and sockets:
 

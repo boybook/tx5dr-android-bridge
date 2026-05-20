@@ -1,9 +1,13 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class,
+)
 
 package com.tx5dr.bridge.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,9 +67,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -82,6 +83,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -127,8 +129,6 @@ fun DashboardScreen(
     onStopRuntime: () -> Unit,
     onOpenWebView: () -> Unit,
     onAuthorizeAudio: () -> Unit,
-    onSetAudioInputRoute: (String) -> Unit,
-    onSetAudioOutputRoute: (String) -> Unit,
     onStartSerial: () -> Unit,
     onSetKeepAlive: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
@@ -215,8 +215,6 @@ fun DashboardScreen(
                         onAudioClick = { detailSheet = DetailSheet.Audio },
                         onSerialClick = { detailSheet = DetailSheet.Serial },
                         onAuthorizeAudio = onAuthorizeAudio,
-                        onSetAudioInputRoute = onSetAudioInputRoute,
-                        onSetAudioOutputRoute = onSetAudioOutputRoute,
                         onSetKeepAlive = onSetKeepAlive,
                         onRefreshBridges = onRefreshBridges,
                         onOpenBatterySettings = onOpenBatterySettings,
@@ -268,8 +266,6 @@ fun DashboardScreen(
                     status = usbAudioStatus,
                     onDismiss = { detailSheet = null },
                     onAuthorizeAudio = onAuthorizeAudio,
-                    onSetInputRoute = onSetAudioInputRoute,
-                    onSetOutputRoute = onSetAudioOutputRoute,
                     onShowDiagnostics = {
                         detailSheet = null
                         onShowLogs()
@@ -327,8 +323,6 @@ private fun DashboardContent(
     onAudioClick: () -> Unit,
     onSerialClick: () -> Unit,
     onAuthorizeAudio: () -> Unit,
-    onSetAudioInputRoute: (String) -> Unit,
-    onSetAudioOutputRoute: (String) -> Unit,
     onSetKeepAlive: (Boolean) -> Unit,
     onRefreshBridges: () -> Unit,
     onOpenBatterySettings: () -> Unit,
@@ -948,7 +942,7 @@ private fun SettingsSheet(
                 onCopyText = onCopyText,
                 onOpenDataDirectory = onOpenDataDirectory,
             )
-            SettingsGroup {
+            SettingsGroup(containerColor = MaterialTheme.colorScheme.surface) {
                 SettingsAction(
                     icon = Icons.Filled.Lan,
                     title = stringResource(R.string.refresh_lan),
@@ -1001,17 +995,13 @@ private fun DataDirectorySettingsCard(
     onOpenDataDirectory: () -> Unit,
 ) {
     SettingsGroup {
-        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-            ListItem(
-                leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null) },
-                headlineContent = { Text(stringResource(R.string.data_directory_title)) },
-                supportingContent = {
-                    Text(
-                        if (status.external) stringResource(R.string.data_directory_external_subtitle)
-                        else stringResource(R.string.data_directory_internal_subtitle),
-                    )
-                },
-                trailingContent = {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            SettingsCardHeader(
+                icon = Icons.Filled.Folder,
+                title = stringResource(R.string.data_directory_title),
+                subtitle = if (status.external) stringResource(R.string.data_directory_external_subtitle)
+                else stringResource(R.string.data_directory_internal_subtitle),
+                action = {
                     IconButton(
                         enabled = !status.rootPath.isNullOrBlank(),
                         onClick = { status.rootPath?.let(onCopyText) },
@@ -1020,21 +1010,22 @@ private fun DataDirectorySettingsCard(
                     }
                 },
             )
-            DataDirectoryPathRow(stringResource(R.string.data_directory_user_data), status.dataPath)
-            DataDirectoryPathRow(stringResource(R.string.data_directory_logs), status.logsPath)
-            DataDirectoryPathRow(stringResource(R.string.data_directory_plugins), status.pluginsPath)
-            DataDirectoryPathRow(stringResource(R.string.data_directory_plugin_data), status.pluginDataPath)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DataDirectoryPathRow(stringResource(R.string.data_directory_user_data), status.dataPath)
+                DataDirectoryPathRow(stringResource(R.string.data_directory_logs), status.logsPath)
+                DataDirectoryPathRow(stringResource(R.string.data_directory_plugins), status.pluginsPath)
+                DataDirectoryPathRow(stringResource(R.string.data_directory_plugin_data), status.pluginDataPath)
+            }
             status.fallbackReason?.takeIf { it.isNotBlank() }?.let {
                 Text(
                     it,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
             }
             TextButton(
                 onClick = onOpenDataDirectory,
-                modifier = Modifier.padding(horizontal = 12.dp),
+                modifier = Modifier.align(Alignment.Start),
             ) {
                 Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -1045,23 +1036,45 @@ private fun DataDirectorySettingsCard(
 }
 
 @Composable
+private fun SettingsCardHeader(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    action: @Composable () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(28.dp))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        action()
+    }
+}
+
+@Composable
 private fun DataDirectoryPathRow(label: String, path: String?) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             label,
-            modifier = Modifier.widthIn(min = 86.dp, max = 116.dp),
+            modifier = Modifier.width(76.dp),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
             path ?: stringResource(R.string.not_available),
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).basicMarquee(iterations = Int.MAX_VALUE),
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            overflow = TextOverflow.Clip,
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
         )
@@ -1089,13 +1102,19 @@ private fun DataDirectoryDiagnostic(status: ExternalDataStatus) {
 }
 
 @Composable
-private fun SettingsGroup(content: @Composable () -> Unit) {
+private fun SettingsGroup(
+    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+    content: @Composable () -> Unit,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+        color = containerColor,
         shape = MaterialTheme.shapes.extraLarge,
-        content = content,
-    )
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            content()
+        }
+    }
 }
 
 @Composable
@@ -1114,12 +1133,24 @@ private fun SettingsAction(
     subtitle: String,
     onClick: () -> Unit,
 ) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
-        leadingContent = { Icon(icon, contentDescription = null) },
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
-    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(28.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1128,8 +1159,6 @@ private fun AudioDetailSheet(
     status: UsbAudioStatus,
     onDismiss: () -> Unit,
     onAuthorizeAudio: () -> Unit,
-    onSetInputRoute: (String) -> Unit,
-    onSetOutputRoute: (String) -> Unit,
     onShowDiagnostics: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1143,36 +1172,21 @@ private fun AudioDetailSheet(
                 )
                 StateChip(status.state)
             }
-            AudioRouteSection(
-                title = stringResource(R.string.input_route),
-                activeText = stringResource(R.string.active_input_format, displayAudioDeviceName(status.activeInputDevice)),
-                selectedRoute = status.selectedInputRoute,
-                routes = listOf(AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_MIC),
+            Text(
+                stringResource(R.string.audio_devices_available_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            AudioDeviceListSection(
+                title = stringResource(R.string.audio_input_devices),
+                emptyText = stringResource(R.string.no_input_devices_detected),
                 devices = status.inputDevices,
-                onSelect = onSetInputRoute,
             )
-            AudioRouteSection(
-                title = stringResource(R.string.output_route),
-                activeText = stringResource(R.string.active_output_format, displayAudioDeviceName(status.activeOutputDevice)),
-                selectedRoute = status.selectedOutputRoute,
-                routes = listOf(AudioRoute.AUTO, AudioRoute.USB, AudioRoute.BUILTIN_SPEAKER),
+            AudioDeviceListSection(
+                title = stringResource(R.string.audio_output_devices),
+                emptyText = stringResource(R.string.no_output_devices_detected),
                 devices = status.outputDevices,
-                onSelect = onSetOutputRoute,
             )
-            if (usesBuiltinAudio(status)) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        stringResource(R.string.phone_audio_notice),
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
             status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onAuthorizeAudio) { Text(if (status.state == "streaming") stringResource(R.string.audio_reconnect) else stringResource(R.string.authorize_start)) }
@@ -1184,43 +1198,54 @@ private fun AudioDetailSheet(
 }
 
 @Composable
-private fun AudioRouteSection(
+private fun AudioDeviceListSection(
     title: String,
-    activeText: String,
-    selectedRoute: String,
-    routes: List<String>,
+    emptyText: String,
     devices: List<UsbAudioDevice>,
-    onSelect: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Text(activeText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            routes.forEachIndexed { index, route ->
-                SegmentedButton(
-                    selected = selectedRoute == route,
-                    onClick = { onSelect(route) },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = routes.size),
-                ) {
-                    Text(audioRouteSegmentLabel(route), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        if (devices.isEmpty()) {
+            Text(emptyText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    devices.forEachIndexed { index, device ->
+                        AudioDeviceRow(device)
+                        if (index != devices.lastIndex) HorizontalDivider()
+                    }
                 }
             }
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            devices.forEach { device ->
-                val route = "${AudioRoute.DEVICE_PREFIX}${device.id}"
-                AssistChip(
-                    onClick = { onSelect(route) },
-                    label = { Text(displayAudioDeviceName(device), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingIcon = if (selectedRoute == route) {
-                        { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                    } else null,
-                )
-            }
-        }
     }
+}
+
+@Composable
+private fun AudioDeviceRow(device: UsbAudioDevice) {
+    ListItem(
+        headlineContent = { Text(displayAudioDeviceName(device), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = {
+            Text(
+                stringResource(R.string.audio_device_socket_format, device.socketPath),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        trailingContent = {
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = stringResource(
+                    if (device.connected) R.string.cd_audio_device_connected else R.string.cd_audio_device_ready
+                ),
+                tint = if (device.connected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1234,8 +1259,15 @@ private fun SerialDetailSheet(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text(stringResource(R.string.usb_serial), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            StateChip(usbSerialState(status))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.usb_serial),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                StateChip(usbSerialState(status))
+            }
             SerialDeviceList(status, onCopyText)
             status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1254,27 +1286,57 @@ private fun SerialDeviceList(status: UsbSerialStatus, onCopyText: (String) -> Un
         if (status.devices.isEmpty()) {
             Text(stringResource(R.string.no_device_detected), color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            status.devices.forEach { device ->
-                ListItem(
-                    headlineContent = { Text(device.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(stringResource(R.string.path_format, device.path), fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(stringResource(R.string.serial_bridge_socket_format, device.bridgeSocket), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                        }
-                    },
-                    trailingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            StateChip(serialDeviceState(device))
-                            IconButton(onClick = { onCopyText(device.path) }) {
-                                Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.copy_serial_path))
-                            }
-                        }
-                    },
-                )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    status.devices.forEachIndexed { index, device ->
+                        ListItem(
+                            headlineContent = { Text(device.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            supportingContent = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(stringResource(R.string.path_format, device.path), fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(stringResource(R.string.serial_bridge_socket_format, device.bridgeSocket), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    device.error?.let { Text(it, color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                                }
+                            },
+                            trailingContent = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SerialDeviceStatusIcon(device)
+                                    IconButton(onClick = { onCopyText(device.path) }) {
+                                        Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.copy_serial_path))
+                                    }
+                                }
+                            },
+                        )
+                        if (index != status.devices.lastIndex) HorizontalDivider()
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun SerialDeviceStatusIcon(device: com.tx5dr.bridge.AndroidSerialDevice) {
+    when {
+        device.error != null -> Icon(
+            Icons.Filled.Error,
+            contentDescription = bridgeLabel("error"),
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(18.dp),
+        )
+        device.granted -> Icon(
+            Icons.Filled.CheckCircle,
+            contentDescription = stringResource(
+                if (device.connected) R.string.cd_serial_device_connected else R.string.cd_serial_device_ready
+            ),
+            tint = if (device.connected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        else -> StateChip("permission-required")
     }
 }
 
@@ -1292,13 +1354,7 @@ private fun DeviceList(title: String, values: List<String>) {
 
 @Composable
 private fun audioRouteSummary(status: UsbAudioStatus): String {
-    val input = status.activeInputDevice ?: preferredInputDevice(status)
-    val output = status.activeOutputDevice ?: preferredOutputDevice(status)
-    return stringResource(
-        R.string.audio_route_summary,
-        displayAudioDeviceName(input),
-        displayAudioDeviceName(output),
-    )
+    return stringResource(R.string.audio_device_count_summary, status.inputDevices.size, status.outputDevices.size)
 }
 
 @Composable
@@ -1312,56 +1368,11 @@ private fun displayAudioDeviceName(device: UsbAudioDevice?): String {
 }
 
 @Composable
-private fun audioRouteSegmentLabel(route: String): String = when (route) {
-    AudioRoute.AUTO -> stringResource(R.string.audio_route_auto)
-    AudioRoute.USB -> stringResource(R.string.usb_sound_card)
-    AudioRoute.BUILTIN_MIC -> stringResource(R.string.audio_route_mic_short)
-    AudioRoute.BUILTIN_SPEAKER -> stringResource(R.string.audio_route_speaker_short)
-    else -> route
-}
-
-private fun usesBuiltinAudio(status: UsbAudioStatus): Boolean =
-    status.selectedInputRoute == AudioRoute.BUILTIN_MIC ||
-        status.selectedOutputRoute == AudioRoute.BUILTIN_SPEAKER ||
-        status.activeInputDevice?.kind == AudioRoute.BUILTIN_MIC ||
-        status.activeOutputDevice?.kind == AudioRoute.BUILTIN_SPEAKER
-
-private fun preferredInputDevice(status: UsbAudioStatus): UsbAudioDevice? = when (status.selectedInputRoute) {
-    AudioRoute.USB -> status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
-    AudioRoute.BUILTIN_MIC -> status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
-    else -> status.selectedInputRoute.takeIf { it.startsWith(AudioRoute.DEVICE_PREFIX) }
-        ?.removePrefix(AudioRoute.DEVICE_PREFIX)
-        ?.toIntOrNull()
-        ?.let { id -> status.inputDevices.firstOrNull { it.id == id } }
-        ?: status.inputDevices.firstOrNull { it.kind == AudioRoute.USB }
-        ?: status.inputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC }
-}
-
-private fun preferredOutputDevice(status: UsbAudioStatus): UsbAudioDevice? = when (status.selectedOutputRoute) {
-    AudioRoute.USB -> status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
-    AudioRoute.BUILTIN_SPEAKER -> status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
-    else -> status.selectedOutputRoute.takeIf { it.startsWith(AudioRoute.DEVICE_PREFIX) }
-        ?.removePrefix(AudioRoute.DEVICE_PREFIX)
-        ?.toIntOrNull()
-        ?.let { id -> status.outputDevices.firstOrNull { it.id == id } }
-        ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.USB }
-        ?: status.outputDevices.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER }
-}
-
-@Composable
 private fun serialSummary(status: UsbSerialStatus): String = when {
     status.mappedCount > 1 -> stringResource(R.string.serial_mapped_count, status.mappedCount)
     status.activePath != null -> status.activePath
     status.devices.isNotEmpty() -> status.devices.first().name
     else -> stringResource(R.string.serial_auto_detect)
-}
-
-private fun serialDeviceState(device: com.tx5dr.bridge.AndroidSerialDevice): String = when {
-    !device.granted -> "permission-required"
-    device.error != null -> "error"
-    device.connected -> "connected"
-    device.active -> "waiting-helper"
-    else -> "stopped"
 }
 
 private fun usbSerialState(status: UsbSerialStatus): String = when {
