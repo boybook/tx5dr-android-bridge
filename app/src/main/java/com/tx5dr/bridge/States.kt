@@ -44,6 +44,7 @@ data class BridgeStatus(
     val runtimeState: RuntimeState = RuntimeState.NotInstalled,
     val runtimePhase: RuntimePhase = RuntimePhase.Idle,
     val runtimeDetail: String? = null,
+    val runtimeAbiStatus: RuntimeAbiStatus = RuntimeAbiStatus(),
     val startedAtMs: Long? = null,
     val lastExitCode: Int? = null,
     val lastExitReason: String? = null,
@@ -55,6 +56,15 @@ data class BridgeStatus(
     val progress: String? = null,
     val installProgress: InstallProgress? = null,
     val error: String? = null,
+)
+
+data class RuntimeAbiStatus(
+    val supported: Boolean = true,
+    val requiredAbi: String = "arm64-v8a",
+    val supportedAbis: String = "",
+    val supported64BitAbis: String = "",
+    val nativeLibraryDir: String = "",
+    val zygote: String = "",
 )
 
 data class ReleasePreview(

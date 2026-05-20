@@ -11,6 +11,9 @@
     <string name="runtime_service_running">Service running</string>
     <string name="runtime_install_required">Engine installation required</string>
     <string name="runtime_installing">Installing engine</string>
+    <string name="runtime_unsupported_title">Unsupported Android system</string>
+    <string name="runtime_unsupported_subtitle">TX-5DR Android runtime requires a 64-bit Android system with arm64-v8a.</string>
+    <string name="runtime_unsupported_chip">Unsupported</string>
     <string name="runtime_not_started">Service not started</string>
     <string name="runtime_starting">Preparing service</string>
     <string name="runtime_stopping">Stopping service</string>
@@ -138,6 +141,14 @@
     <string name="diagnostics_settings">Diagnostics and settings</string>
     <string name="settings">Settings</string>
     <string name="recent_error">Recent error</string>
+    <string name="system_abi_title">System ABI</string>
+    <string name="system_abi_supported">This device can run the TX-5DR Android runtime.</string>
+    <string name="system_abi_unsupported">This device only exposes a 32-bit Android userspace. Please use a 64-bit Android phone, tablet, or Android TV.</string>
+    <string name="system_abi_required">Required: %1$s</string>
+    <string name="system_abi_supported_abis">Supported ABIs: %1$s</string>
+    <string name="system_abi_supported_64_bit_abis">64-bit ABIs: %1$s</string>
+    <string name="system_abi_zygote">Zygote: %1$s</string>
+    <string name="system_abi_native_library_dir">Native library dir: %1$s</string>
     <string name="auto_enter_tx5dr">Automatically enter TX-5DR after startup</string>
     <string name="auto_enter_tx5dr_subtitle">When off, only the background service runs.</string>
     <string name="audio_buffer_target_title">Audio buffer</string>

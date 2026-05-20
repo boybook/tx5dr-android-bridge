@@ -35,6 +35,10 @@ android {
         targetSdk = 34
         versionCode = envInt("TX5DR_ANDROID_VERSION_CODE", 1)
         versionName = env("TX5DR_ANDROID_VERSION_NAME") ?: "0.1.0-poc"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     androidResources {

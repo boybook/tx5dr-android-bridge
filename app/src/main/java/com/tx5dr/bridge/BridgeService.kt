@@ -106,6 +106,7 @@ class BridgeService : Service() {
     }
 
     private fun notificationStateLabel(status: BridgeStatus): String {
+        if (!status.runtimeAbiStatus.supported) return getString(R.string.runtime_unsupported_title)
         if (status.error != null || status.runtimeState == RuntimeState.Error) return getString(R.string.runtime_needs_attention)
         if (status.serverHealthy && status.webHealthy) return getString(R.string.runtime_service_running)
         return when (status.runtimeState) {

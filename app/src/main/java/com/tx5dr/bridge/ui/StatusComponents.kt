@@ -30,6 +30,13 @@ internal data class StatusVisual(
 internal fun statusVisual(status: BridgeStatus): StatusVisual {
     val scheme = androidx.compose.material3.MaterialTheme.colorScheme
     return when {
+        !status.runtimeAbiStatus.supported -> StatusVisual(
+            title = stringResource(R.string.runtime_unsupported_title),
+            subtitle = stringResource(R.string.runtime_unsupported_subtitle),
+            chip = stringResource(R.string.runtime_unsupported_chip),
+            icon = Icons.Filled.Error,
+            color = scheme.error,
+        )
         status.error != null || status.runtimeState == RuntimeState.Error -> StatusVisual(
             title = stringResource(R.string.runtime_needs_attention),
             subtitle = runtimeErrorSubtitle(status),

@@ -85,6 +85,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -252,6 +253,7 @@ fun DashboardScreen(
 
             if (showSettingsSheet) {
                 SettingsSheet(
+                    bridgeStatus = bridgeStatus,
                     manifestUrl = manifestUrl,
                     autoOpenWebView = autoOpenWebView,
                     notificationPermissionState = notificationPermissionState,
@@ -486,6 +488,13 @@ private fun HeroStatusPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             when {
+                !status.runtimeAbiStatus.supported -> {
+                    Button(onClick = onShowDiagnostics, modifier = Modifier.widthIn(min = 144.dp)) {
+                        Icon(Icons.Filled.Info, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_diagnostics))
+                    }
+                }
                 visual.busy -> {
                     Button(onClick = {}, enabled = false, modifier = Modifier.widthIn(min = 156.dp)) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null)
@@ -889,6 +898,7 @@ private fun LogsSheet(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(stringResource(R.string.runtime_logs), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            SystemAbiDiagnostic(bridgeStatus)
             DataDirectoryDiagnostic(externalDataStatus)
             bridgeStatus.error?.let {
                 Card(Modifier.fillMaxWidth()) {
@@ -947,9 +957,43 @@ private fun logLineColor(line: String): Color {
     }
 }
 
+@Composable
+private fun SystemAbiDiagnostic(status: BridgeStatus) {
+    val abi = status.runtimeAbiStatus
+    Card(Modifier.fillMaxWidth()) {
+        ListItem(
+            leadingContent = {
+                Icon(
+                    if (abi.supported) Icons.Filled.CheckCircle else Icons.Filled.Error,
+                    contentDescription = null,
+                    tint = if (abi.supported) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
+            },
+            headlineContent = { Text(stringResource(R.string.system_abi_title)) },
+            supportingContent = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        if (abi.supported) {
+                            stringResource(R.string.system_abi_supported)
+                        } else {
+                            stringResource(R.string.system_abi_unsupported)
+                        },
+                    )
+                    Text(stringResource(R.string.system_abi_required, abi.requiredAbi))
+                    Text(stringResource(R.string.system_abi_supported_abis, abi.supportedAbis.ifBlank { stringResource(R.string.not_available) }))
+                    Text(stringResource(R.string.system_abi_supported_64_bit_abis, abi.supported64BitAbis.ifBlank { stringResource(R.string.not_available) }))
+                    Text(stringResource(R.string.system_abi_zygote, abi.zygote.ifBlank { stringResource(R.string.not_available) }))
+                    Text(stringResource(R.string.system_abi_native_library_dir, abi.nativeLibraryDir.ifBlank { stringResource(R.string.not_available) }))
+                }
+            },
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsSheet(
+    bridgeStatus: BridgeStatus,
     manifestUrl: String,
     autoOpenWebView: Boolean,
     notificationPermissionState: String,
@@ -1019,8 +1063,13 @@ private fun SettingsSheet(
                 SettingsAction(
                     icon = Icons.Filled.PowerSettingsNew,
                     title = stringResource(R.string.install_update),
-                    subtitle = stringResource(R.string.install_update_subtitle),
+                    subtitle = if (bridgeStatus.runtimeAbiStatus.supported) {
+                        stringResource(R.string.install_update_subtitle)
+                    } else {
+                        stringResource(R.string.runtime_unsupported_subtitle)
+                    },
                     onClick = onInstallClick,
+                    enabled = bridgeStatus.runtimeAbiStatus.supported,
                 )
             }
             OutlinedTextField(
@@ -1222,11 +1271,13 @@ private fun SettingsAction(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.48f)
             .padding(horizontal = 24.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(18.dp),

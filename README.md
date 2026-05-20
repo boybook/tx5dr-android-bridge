@@ -1,10 +1,10 @@
 # TX-5DR Android
 
-TX-5DR Android turns an Android 9+ arm64 phone or tablet into a portable TX-5DR radio gateway. The app runs the TX-5DR Linux runtime inside an app-private Debian PRoot environment, opens the TX-5DR web interface in an embedded WebView, and bridges Android audio, USB serial, notifications, and LAN/hotspot access into the runtime.
+TX-5DR Android turns an Android 9+ arm64 phone, tablet, or Android TV into a portable TX-5DR radio gateway. The app runs the TX-5DR Linux runtime inside an app-private Debian PRoot environment, opens the TX-5DR web interface in an embedded WebView, and bridges Android audio, USB serial, notifications, and LAN/hotspot access into the runtime.
 
 - App name: `TX-5DR`
 - Package id: `com.tx5dr.bridge`
-- Supported devices: real arm64 Android 9+ devices (`minSdk 28`)
+- Supported devices: real Android 9+ devices (`minSdk 28`) with 64-bit Android userspace (`arm64-v8a`)
 - Distribution channel: signed nightly APK from the TX-5DR download site
 - Runtime channel: Android arm64 TX-5DR runtime manifest downloaded by the app
 
@@ -332,7 +332,7 @@ When distributing modified APKs, provide the corresponding source for this repos
 
 ## Known Limits
 
-- Only arm64 real Android 9+ devices are targeted.
+- Only arm64 real Android 9+ devices are targeted. Some Android TV boxes use ARMv8 chips but ship a 32-bit Android userspace (`armeabi-v7a`/`zygote32`); those devices cannot run the current arm64 PRoot/rootfs runtime.
 - No Play Store compliance, AAB release, or stable channel has been done.
 - Runtime self-update is implemented for the TX-5DR runtime; APK self-update installation is not implemented yet.
 - USB serial bridge is experimental: CAT byte I/O and termios baud/parity sync are implemented; DTR/RTS/CW over PTY modem lines still needs hardware validation.

@@ -107,6 +107,13 @@ object BridgeRuntime {
         executor.execute {
             try {
                 LogBus.i(TAG, "Bootstrap started")
+                val abiStatus = RuntimeCompatibility.snapshot(paths.nativeLibDir)
+                if (!abiStatus.supported) {
+                    val reason = RuntimeCompatibility.unsupportedReason(abiStatus)
+                    LogBus.e(TAG, reason)
+                    updateStatus(detectInitialStatus().copy(runtimePhase = RuntimePhase.Error, runtimeDetail = reason, error = reason))
+                    return@execute
+                }
                 refreshNetworkAccess()
                 if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
                 val initial = detectInitialStatus()
@@ -157,6 +164,7 @@ object BridgeRuntime {
         executor.execute {
             try {
                 LogBus.i(TAG, "Install/update started")
+                RuntimeCompatibility.requireSupported(paths.nativeLibDir)
                 updateStatus(status.copy(
                     runtimeState = RuntimeState.Installing,
                     runtimePhase = RuntimePhase.PreparingRuntime,
@@ -192,6 +200,7 @@ object BridgeRuntime {
             try {
                 stopRequested = false
                 healthRunning = false
+                RuntimeCompatibility.requireSupported(paths.nativeLibDir)
                 updateStatus(status.copy(
                     runtimeState = RuntimeState.Starting,
                     runtimePhase = RuntimePhase.PreparingRuntime,
@@ -380,6 +389,7 @@ object BridgeRuntime {
         return BridgeStatus(
             runtimeState = if (installed) RuntimeState.Installed else RuntimeState.NotInstalled,
             runtimePhase = RuntimePhase.Idle,
+            runtimeAbiStatus = RuntimeCompatibility.snapshot(paths.nativeLibDir),
             installedVersion = version,
         )
     }
@@ -462,6 +472,7 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
 
     private fun ensureHostRuntimeEnvironment() {
         paths.ensureDirs()
+        RuntimeCompatibility.requireSupported(paths.nativeLibDir)
         require(paths.prootFile.exists()) { "Missing bundled PRoot executable: ${paths.prootFile.absolutePath}. Run tools/fetch-proot.sh and rebuild the APK." }
         require(paths.tallocLib.exists()) { "Missing bundled PRoot dependency libtalloc.so. Run tools/fetch-proot.sh and rebuild the APK." }
         require(paths.prootLoader64.exists()) { "Missing bundled PRoot loader: ${paths.prootLoader64.absolutePath}. Run tools/fetch-proot.sh and rebuild the APK." }
@@ -665,10 +676,11 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
     }
 
     private fun updateStatus(next: BridgeStatus) {
-        status = next
+        val current = next.copy(runtimeAbiStatus = RuntimeCompatibility.snapshot(paths.nativeLibDir))
+        status = current
         main.post {
             listeners.forEach { listener ->
-                runCatching { listener(next) }.onFailure { Log.w(TAG, "Status listener failed", it) }
+                runCatching { listener(current) }.onFailure { Log.w(TAG, "Status listener failed", it) }
             }
         }
     }

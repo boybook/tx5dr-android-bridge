@@ -11,6 +11,9 @@
     <string name="runtime_service_running">服务运行中</string>
     <string name="runtime_install_required">需要安装引擎</string>
     <string name="runtime_installing">正在安装引擎</string>
+    <string name="runtime_unsupported_title">不支持此 Android 系统</string>
+    <string name="runtime_unsupported_subtitle">TX-5DR Android 运行环境需要 64-bit Android 系统和 arm64-v8a。</string>
+    <string name="runtime_unsupported_chip">不支持</string>
     <string name="runtime_not_started">服务未启动</string>
     <string name="runtime_starting">正在准备服务</string>
     <string name="runtime_stopping">正在停止服务</string>
@@ -138,6 +141,14 @@
     <string name="diagnostics_settings">诊断与设置</string>
     <string name="settings">设置</string>
     <string name="recent_error">最近错误</string>
+    <string name="system_abi_title">系统 ABI</string>
+    <string name="system_abi_supported">此设备可以运行 TX-5DR Android 运行环境。</string>
+    <string name="system_abi_unsupported">当前设备仅暴露 32-bit Android 用户态，请使用 64-bit Android 手机、平板或 Android TV。</string>
+    <string name="system_abi_required">需要：%1$s</string>
+    <string name="system_abi_supported_abis">支持的 ABI：%1$s</string>
+    <string name="system_abi_supported_64_bit_abis">64-bit ABI：%1$s</string>
+    <string name="system_abi_zygote">Zygote：%1$s</string>
+    <string name="system_abi_native_library_dir">Native library 目录：%1$s</string>
     <string name="auto_enter_tx5dr">启动后自动进入 TX-5DR</string>
     <string name="auto_enter_tx5dr_subtitle">关闭后仅运行后台服务。</string>
     <string name="audio_buffer_target_title">音频缓冲</string>
