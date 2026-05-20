@@ -26,6 +26,8 @@ object AndroidUsbSerialBridge {
     private const val ACTION_USB_PERMISSION = "com.tx5dr.bridge.USB_PERMISSION"
     private const val STATS_INTERVAL_MS = 5000L
     private const val READ_TIMEOUT_MS = 50
+    private const val IDLE_READ_TIMEOUT_MS = 500
+    private const val ACTIVE_IDLE_WINDOW_MS = 30_000L
     private const val WRITE_TIMEOUT_MS = 2000
     private const val FRAME_DATA = 1
     private const val FRAME_CONFIG = 2
@@ -215,6 +217,7 @@ object AndroidUsbSerialBridge {
                 server.accept().use { socket ->
                     session.clientSocket = socket
                     session.connected = true
+                    session.markActivity()
                     updateFromCurrentDevices("connected", null)
                     LogBus.i(TAG, "Linux serial PTY helper connected for ${session.device.path}")
                     val input = DataInputStream(socket.getInputStream())
@@ -223,10 +226,14 @@ object AndroidUsbSerialBridge {
                         val buffer = ByteArray(4096)
                         while (session.running) {
                             try {
+                                val timeoutMs = session.readTimeoutMs()
+                                val idleMode = timeoutMs == IDLE_READ_TIMEOUT_MS
                                 val beforeRead = System.nanoTime()
-                                val n = session.port.read(buffer, READ_TIMEOUT_MS)
+                                val n = session.port.read(buffer, timeoutMs)
                                 val readMs = elapsedMsSince(beforeRead)
+                                session.stats.recordUsbPoll(idleMode)
                                 if (n > 0) {
+                                    session.markActivity()
                                     session.stats.recordUsbRead(n, readMs)
                                     val beforeSocketWrite = System.nanoTime()
                                     writeFrame(output, FRAME_DATA, buffer.copyOf(n))
@@ -248,6 +255,7 @@ object AndroidUsbSerialBridge {
                         require(length in 0..1048576) { "Invalid serial frame length $length" }
                         val payload = ByteArray(length)
                         input.readFully(payload)
+                        session.markActivity()
                         when (type) {
                             FRAME_DATA -> {
                                 val beforeWrite = System.nanoTime()
@@ -472,8 +480,18 @@ object AndroidUsbSerialBridge {
         @Volatile var clientSocket: android.net.LocalSocket? = null
         @Volatile var serverThread: Thread? = null
         @Volatile var readThread: Thread? = null
+        @Volatile private var lastActivityAtMs = System.currentTimeMillis()
         val stats = SerialStats()
         val isAlive: Boolean get() = running && serverThread?.isAlive == true
+
+        fun markActivity() {
+            lastActivityAtMs = System.currentTimeMillis()
+        }
+
+        fun readTimeoutMs(): Int {
+            val idleForMs = System.currentTimeMillis() - lastActivityAtMs
+            return if (idleForMs > ACTIVE_IDLE_WINDOW_MS) IDLE_READ_TIMEOUT_MS else READ_TIMEOUT_MS
+        }
 
         fun stop() {
             running = false
@@ -496,10 +514,16 @@ object AndroidUsbSerialBridge {
         private var socketWriteBytes = 0L
         private var usbWriteFrames = 0L
         private var usbWriteBytes = 0L
+        private var activePolls = 0L
+        private var idlePolls = 0L
         private var errors = 0L
         private val usbReadLatency = LatencyWindow()
         private val socketWriteLatency = LatencyWindow()
         private val usbWriteLatency = LatencyWindow()
+
+        @Synchronized fun recordUsbPoll(idleMode: Boolean) {
+            if (idleMode) idlePolls += 1 else activePolls += 1
+        }
 
         @Synchronized fun recordUsbRead(bytes: Int, readMs: Double) {
             usbReadFrames += 1
@@ -536,7 +560,7 @@ object AndroidUsbSerialBridge {
             val usbWrite = usbWriteLatency.snapshot()
             LogBus.i(
                 TAG,
-                "USB serial stats path=$path elapsed=${"%.1f".format(elapsedSeconds)}s readFrames=$usbReadFrames readBytes=$usbReadBytes readTimeouts=$usbReadTimeouts socketWriteFrames=$socketWriteFrames socketWriteBytes=$socketWriteBytes usbWriteFrames=$usbWriteFrames usbWriteBytes=$usbWriteBytes errors=$errors ${read.format("serialUsbRead")} ${socketWrite.format("serialSocketWrite")} ${usbWrite.format("serialUsbWrite")}"
+                "USB serial stats path=$path elapsed=${"%.1f".format(elapsedSeconds)}s readFrames=$usbReadFrames readBytes=$usbReadBytes readTimeouts=$usbReadTimeouts activePolls=$activePolls idlePolls=$idlePolls socketWriteFrames=$socketWriteFrames socketWriteBytes=$socketWriteBytes usbWriteFrames=$usbWriteFrames usbWriteBytes=$usbWriteBytes errors=$errors ${read.format("serialUsbRead")} ${socketWrite.format("serialSocketWrite")} ${usbWrite.format("serialUsbWrite")}"
             )
             lastLoggedAt = now
         }

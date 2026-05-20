@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #define FRAME_DATA 1
@@ -46,6 +47,46 @@ static int write_all(int fd, const void *buf, size_t len) {
     ssize_t n = write(fd, p, len);
     if (n < 0 && errno == EINTR) continue;
     if (n <= 0) return -1;
+    p += n;
+    len -= (size_t)n;
+  }
+  return 0;
+}
+
+static void warn_throttled(const char *message) {
+  static time_t last_warn = 0;
+  time_t now = time(NULL);
+  if (now - last_warn >= 30) {
+    fprintf(stderr, "%s\n", message);
+    last_warn = now;
+  }
+}
+
+static void sleep_after_pty_idle(void) { usleep(50000); }
+
+static int set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) return -1;
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int write_pty_best_effort(int fd, const void *buf, size_t len) {
+  const unsigned char *p = (const unsigned char *)buf;
+  while (len > 0) {
+    ssize_t n = write(fd, p, len);
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      warn_throttled("PTY output buffer full; dropping serial chunk");
+      return 0;
+    }
+    if (n < 0 && errno == EIO) {
+      warn_throttled("PTY slave is not ready; dropping serial chunk");
+      return 0;
+    }
+    if (n <= 0) {
+      warn_throttled("PTY write returned no progress; dropping serial chunk");
+      return 0;
+    }
     p += n;
     len -= (size_t)n;
   }
@@ -125,10 +166,17 @@ int main(int argc, char **argv) {
     perror("openpty");
     return 2;
   }
-  close(slave);
+  if (set_nonblocking(master) != 0) {
+    perror("set_nonblocking(master)");
+    close(master);
+    close(slave);
+    return 4;
+  }
   unlink(argv[1]);
   if (symlink(slave_name, argv[1]) != 0) {
     perror("symlink");
+    close(master);
+    close(slave);
     return 3;
   }
   fprintf(stderr, "serial PTY ready: %s -> %s\n", argv[1], slave_name);
@@ -141,7 +189,10 @@ int main(int argc, char **argv) {
   }
   if (sock < 0) {
     fprintf(stderr, "failed to connect serial bridge socket: %s\n", argv[2]);
-    return 4;
+    close(master);
+    close(slave);
+    unlink(argv[1]);
+    return 5;
   }
   send_frame(sock, FRAME_STATUS, "connected", 9);
 
@@ -161,7 +212,21 @@ int main(int argc, char **argv) {
     if (rc < 0) break;
     if (FD_ISSET(master, &rfds)) {
       ssize_t n = read(master, buf, sizeof(buf));
-      if (n > 0 && send_frame(sock, FRAME_DATA, buf, (uint32_t)n) < 0) break;
+      if (n > 0) {
+        if (send_frame(sock, FRAME_DATA, buf, (uint32_t)n) < 0) break;
+      } else if (n < 0 && errno == EINTR) {
+        continue;
+      } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        continue;
+      } else if (n < 0 && errno == EIO) {
+        sleep_after_pty_idle();
+        continue;
+      } else if (n == 0) {
+        sleep_after_pty_idle();
+        continue;
+      } else {
+        break;
+      }
     }
     if (FD_ISSET(sock, &rfds)) {
       uint8_t type;
@@ -171,12 +236,13 @@ int main(int argc, char **argv) {
       if (len > sizeof(buf)) break;
       if (read_all(sock, buf, len) < 0) break;
       if (type == FRAME_DATA && len > 0) {
-        if (write_all(master, buf, len) < 0) break;
+        if (write_pty_best_effort(master, buf, len) < 0) break;
       }
     }
   }
   close(sock);
   close(master);
+  close(slave);
   unlink(argv[1]);
   return 0;
 }
