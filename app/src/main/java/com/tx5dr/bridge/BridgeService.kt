@@ -7,12 +7,16 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.annotation.RequiresApi
 
 class BridgeService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var microphoneForegroundEnabled = false
     private val statusListener: (BridgeStatus) -> Unit = {
         updateNotification()
     }
@@ -24,7 +28,7 @@ class BridgeService : Service() {
         createChannel()
         BridgeRuntime.addStatusListener(statusListener)
         applyWakeLock(BridgeRuntime.getPreference(BridgeRuntime.PREF_KEEP_ALIVE_ENABLED, false))
-        startForeground(NOTIFICATION_ID, buildNotification())
+        applyForegroundServiceType(includeMicrophone = false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -39,7 +43,12 @@ class BridgeService : Service() {
             }
             ACTION_INSTALL -> BridgeRuntime.installOrUpdate()
             ACTION_START_BRIDGES -> BridgeRuntime.startBridges()
-            ACTION_STOP_BRIDGES -> BridgeRuntime.stopBridges()
+            ACTION_STOP_BRIDGES -> {
+                BridgeRuntime.stopBridges()
+                setMicrophoneForeground(false)
+            }
+            ACTION_ENABLE_MICROPHONE_FOREGROUND -> setMicrophoneForeground(true)
+            ACTION_DISABLE_MICROPHONE_FOREGROUND -> setMicrophoneForeground(false)
             ACTION_SET_KEEPALIVE -> {
                 val enabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
                 BridgeRuntime.setPreference(BridgeRuntime.PREF_KEEP_ALIVE_ENABLED, enabled)
@@ -115,6 +124,46 @@ class BridgeService : Service() {
         manager.notify(NOTIFICATION_ID, buildNotification())
     }
 
+    private fun setMicrophoneForeground(enabled: Boolean) {
+        if (microphoneForegroundEnabled == enabled) {
+            updateNotification()
+            return
+        }
+        applyForegroundServiceType(includeMicrophone = enabled)
+    }
+
+    private fun applyForegroundServiceType(includeMicrophone: Boolean) {
+        val notification = buildNotification()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, foregroundServiceTypeMask(includeMicrophone))
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            microphoneForegroundEnabled = includeMicrophone
+            LogBus.i("Tx5drBridge", "Foreground service types updated: microphone=$includeMicrophone")
+        } catch (error: SecurityException) {
+            microphoneForegroundEnabled = false
+            LogBus.e("Tx5drBridge", "Unable to enable microphone foreground service type", error)
+            if (includeMicrophone && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, foregroundServiceTypeMask(includeMicrophone = false))
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun foregroundServiceTypeMask(includeMicrophone: Boolean): Int {
+        var mask = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        if (includeMicrophone && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        return mask
+    }
+
     private fun applyWakeLock(enabled: Boolean) {
         if (!enabled) {
             releaseWakeLock()
@@ -153,6 +202,8 @@ class BridgeService : Service() {
         const val ACTION_START_BRIDGES = "com.tx5dr.bridge.START_BRIDGES"
         const val ACTION_STOP_BRIDGES = "com.tx5dr.bridge.STOP_BRIDGES"
         const val ACTION_SET_KEEPALIVE = "com.tx5dr.bridge.SET_KEEPALIVE"
+        const val ACTION_ENABLE_MICROPHONE_FOREGROUND = "com.tx5dr.bridge.ENABLE_MICROPHONE_FOREGROUND"
+        const val ACTION_DISABLE_MICROPHONE_FOREGROUND = "com.tx5dr.bridge.DISABLE_MICROPHONE_FOREGROUND"
         const val EXTRA_ENABLED = "enabled"
 
         fun start(context: Context, action: String) {

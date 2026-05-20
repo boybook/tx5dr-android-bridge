@@ -140,6 +140,7 @@ object AndroidUsbAudioBridge {
             update(status.copy(state = "permission-required", error = "RECORD_AUDIO permission is required"))
             return
         }
+        BridgeService.start(app, BridgeService.ACTION_ENABLE_MICROPHONE_FOREGROUND)
         if (running) return
         val refreshed = refreshDevices(app)
         val inputs = currentInputDevices(app)
@@ -188,6 +189,7 @@ object AndroidUsbAudioBridge {
         val activeSessions = sessions.values.toList()
         sessions.clear()
         activeSessions.forEach { it.stop() }
+        BridgeService.start(BridgeRuntime.appContext(), BridgeService.ACTION_DISABLE_MICROPHONE_FOREGROUND)
         if (stopLinuxSide) BridgeRuntime.stopLinuxAudioSide()
         update(status.copy(state = "stopped"))
     }

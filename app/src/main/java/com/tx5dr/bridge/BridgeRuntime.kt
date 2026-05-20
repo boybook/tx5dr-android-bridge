@@ -88,6 +88,8 @@ object BridgeRuntime {
         prefs.edit().putString(key, value).apply()
     }
 
+    fun appContext(): Context = app
+
     fun getAudioBufferTargetMs(): Int =
         coerceAudioBufferTargetMs(getIntPreference(PREF_AUDIO_BUFFER_TARGET_MS, DEFAULT_AUDIO_BUFFER_TARGET_MS))
 
