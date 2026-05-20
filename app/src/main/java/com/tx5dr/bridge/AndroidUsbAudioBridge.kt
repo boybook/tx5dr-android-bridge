@@ -20,7 +20,7 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.util.ArrayDeque
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -35,11 +35,7 @@ object AudioRoute {
 object AndroidUsbAudioBridge {
     private const val TAG = "AudioBridge"
     private const val STATS_INTERVAL_MS = 5000L
-    private const val QUEUE_CAPACITY_CHUNKS = 2
     private const val SLOW_INPUT_WRITE_MS = 200.0
-    private const val STALE_OUTPUT_CHUNK_MS = 250L
-    private const val SLOW_OUTPUT_WRITE_MS = 100.0
-    private const val SILENCE_FLUSH_MS = 200L
     private const val SILENCE_PEAK_THRESHOLD = 4
     private val sampleRates = intArrayOf(48000, 44100)
     private val listeners = CopyOnWriteArrayList<(UsbAudioStatus) -> Unit>()
@@ -273,10 +269,15 @@ object AndroidUsbAudioBridge {
                             }
                             markDeviceConnected("input", bridgeDevice.id, true)
                             LogBus.i(TAG, "TX-5DR Android input backend connected: ${bridgeDevice.name} source=${sourceName(recordBuild.audioSource)}")
-                            val queue = LatestPcmQueue(QUEUE_CAPACITY_CHUNKS)
+                            val jitterBuffer = PcmJitterBuffer(
+                                sampleRate = formatAndBuffer.sampleRate,
+                                targetMs = formatAndBuffer.bufferTargetMs,
+                                nominalChunkBytes = PcmJitterBuffer.logicalChunkBytes(formatAndBuffer.sampleRate, formatAndBuffer.bufferTargetMs),
+                                mode = PcmJitterMode.INPUT,
+                            )
                             val connected = AtomicBoolean(true)
                             val captureError = AtomicReference<Throwable?>(null)
-                            val stats = InputStats(formatAndBuffer.sampleRate, formatAndBuffer.bufferSize, queue)
+                            val stats = InputStats(formatAndBuffer.sampleRate, formatAndBuffer.bufferSize, jitterBuffer)
                             val captureThread = Thread {
                                 setAudioThreadPriority("input-capture-${device.id}")
                                 val buffer = ByteArray(formatAndBuffer.bufferSize)
@@ -289,7 +290,7 @@ object AndroidUsbAudioBridge {
                                         val readMs = elapsedMsSince(beforeRead)
                                         if (n > 0) {
                                             stats.recordCaptured(buffer, n, readMs, sequence)
-                                            queue.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
+                                            jitterBuffer.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
                                         } else {
                                             stats.recordReadError()
                                         }
@@ -298,7 +299,7 @@ object AndroidUsbAudioBridge {
                                 } catch (error: Throwable) {
                                     captureError.set(error)
                                 } finally {
-                                    queue.close()
+                                    jitterBuffer.close()
                                 }
                             }.also { it.name = "tx5dr-android-audio-input-capture-${device.id}"; it.start() }
 
@@ -306,7 +307,13 @@ object AndroidUsbAudioBridge {
                             val out = socket.getOutputStream()
                             try {
                                 while (running && session.running && connected.get()) {
-                                    val chunk = queue.takeLatest(500) ?: continue
+                                    val take = jitterBuffer.take(500)
+                                    if (take.state == PcmTakeState.CLOSED) break
+                                    if (take.state != PcmTakeState.CHUNK) {
+                                        stats.logIfDue("Android audio input stats")
+                                        continue
+                                    }
+                                    val chunk = take.chunk ?: continue
                                     val ageMs = System.currentTimeMillis() - chunk.createdAtMs
                                     val beforeWrite = System.nanoTime()
                                     out.write(chunk.bytes, 0, chunk.length)
@@ -317,7 +324,7 @@ object AndroidUsbAudioBridge {
                                 }
                             } finally {
                                 connected.set(false)
-                                queue.close()
+                                jitterBuffer.close()
                                 try { recorder.stop() } catch (_: Throwable) {}
                                 recorder.release()
                                 try { socket.close() } catch (_: Throwable) {}
@@ -381,10 +388,15 @@ object AndroidUsbAudioBridge {
                             }
                             markDeviceConnected("output", bridgeDevice.id, true)
                             LogBus.i(TAG, "TX-5DR Android output backend connected: ${bridgeDevice.name}")
-                            val queue = LatestPcmQueue(QUEUE_CAPACITY_CHUNKS)
+                            val jitterBuffer = PcmJitterBuffer(
+                                sampleRate = rate,
+                                targetMs = targetMs,
+                                nominalChunkBytes = PcmJitterBuffer.logicalChunkBytes(rate, targetMs),
+                                mode = PcmJitterMode.OUTPUT,
+                            )
                             val connected = AtomicBoolean(true)
                             val readerError = AtomicReference<Throwable?>(null)
-                            val stats = OutputStats(rate, bufferSize, queue)
+                            val stats = OutputStats(rate, bufferSize, jitterBuffer)
                             val readerThread = Thread {
                                 setAudioThreadPriority("output-reader-${device.id}")
                                 val buffer = ByteArray(bufferSize)
@@ -392,82 +404,66 @@ object AndroidUsbAudioBridge {
                                 try {
                                     val input = socket.getInputStream()
                                     while (running && session.running && connected.get() && !Thread.currentThread().isInterrupted) {
+                                        if (!jitterBuffer.waitForProducerRoom(50)) {
+                                            stats.logIfDue("Android audio output stats")
+                                            continue
+                                        }
                                         val beforeRead = System.nanoTime()
                                         val n = input.read(buffer)
                                         val readMs = elapsedMsSince(beforeRead)
                                         if (n <= 0) break
                                         stats.recordSocketRead(n, readMs, sequence)
-                                        queue.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
+                                        jitterBuffer.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
                                         stats.logIfDue("Android audio output stats")
                                     }
                                 } catch (error: Throwable) {
                                     if (running && connected.get()) readerError.set(error)
                                 } finally {
-                                    queue.close()
+                                    jitterBuffer.close()
                                 }
                             }.also { it.name = "tx5dr-android-audio-output-reader-${device.id}"; it.start() }
 
                             var active = false
-                            var silentSinceMs: Long? = null
-                            var consecutiveZeroWrites = 0
                             try {
                                 while (running && session.running && connected.get()) {
-                                    val chunk = queue.takeLatest(500) ?: continue
-                                    val now = System.currentTimeMillis()
-                                    val ageMs = now - chunk.createdAtMs
-                                    if (ageMs > STALE_OUTPUT_CHUNK_MS) {
-                                        stats.recordDroppedStale(chunk.length, ageMs)
-                                        stats.logIfDue("Android audio output stats")
-                                        continue
+                                    val take = jitterBuffer.take(500)
+                                    when (take.state) {
+                                        PcmTakeState.CLOSED -> break
+                                        PcmTakeState.WAITING -> {
+                                            stats.logIfDue("Android audio output stats")
+                                            continue
+                                        }
+                                        PcmTakeState.UNDERRUN -> {
+                                            if (active) {
+                                                pauseFlush(track)
+                                                active = false
+                                                stats.recordFlush()
+                                            }
+                                            stats.logIfDue("Android audio output stats")
+                                            continue
+                                        }
+                                        PcmTakeState.CHUNK -> Unit
                                     }
+                                    val chunk = take.chunk ?: continue
+                                    val ageMs = System.currentTimeMillis() - chunk.createdAtMs
                                     stats.recordChunkAge(ageMs)
                                     if (chunk.peak <= SILENCE_PEAK_THRESHOLD) {
                                         stats.recordSilence(chunk.length)
-                                        if (active) {
-                                            val started = silentSinceMs ?: now.also { silentSinceMs = it }
-                                            if (now - started >= SILENCE_FLUSH_MS) {
-                                                pauseFlush(track)
-                                                active = false
-                                                consecutiveZeroWrites = 0
-                                                stats.recordFlush()
-                                            }
-                                        }
-                                        stats.logIfDue("Android audio output stats")
-                                        continue
                                     }
 
-                                    silentSinceMs = null
                                     if (!active) {
                                         pauseFlush(track)
                                         track.play()
                                         active = true
-                                        consecutiveZeroWrites = 0
                                         stats.recordFlush()
                                     }
 
-                                    val beforeWrite = System.nanoTime()
-                                    val written = track.write(chunk.bytes, 0, chunk.length, AudioTrack.WRITE_NON_BLOCKING)
-                                    val writeMs = elapsedMsSince(beforeWrite)
-                                    if (written > 0) {
-                                        consecutiveZeroWrites = 0
-                                        if (written < chunk.length) stats.recordPartialWrite(chunk.length - written)
-                                        stats.recordWrite(written, chunk.peak, ageMs, writeMs)
-                                    } else {
-                                        consecutiveZeroWrites += 1
-                                        stats.recordZeroWrite(writeMs)
-                                    }
-                                    if (writeMs > SLOW_OUTPUT_WRITE_MS || consecutiveZeroWrites >= 3) {
-                                        pauseFlush(track)
-                                        active = false
-                                        silentSinceMs = null
-                                        consecutiveZeroWrites = 0
-                                        stats.recordFlush()
-                                    }
+                                    if (!writePcmFully(track, chunk, stats, connected, session, ageMs)) break
                                     stats.logIfDue("Android audio output stats")
                                 }
                             } finally {
                                 connected.set(false)
-                                queue.close()
+                                jitterBuffer.close()
                                 pauseFlush(track)
                                 track.release()
                                 try { socket.close() } catch (_: Throwable) {}
@@ -496,6 +492,52 @@ object AndroidUsbAudioBridge {
     private fun pauseFlush(track: AudioTrack) {
         try { track.pause() } catch (_: Throwable) {}
         try { track.flush() } catch (_: Throwable) {}
+    }
+
+    private fun writePcmFully(
+        track: AudioTrack,
+        chunk: PcmChunk,
+        stats: OutputStats,
+        connected: AtomicBoolean,
+        session: AudioSocketSession,
+        chunkAgeMs: Long,
+    ): Boolean {
+        var offset = 0
+        var noProgressWrites = 0
+        while (offset < chunk.length && running && session.running && connected.get()) {
+            val remaining = chunk.length - offset
+            val beforeWrite = System.nanoTime()
+            val written = track.write(chunk.bytes, offset, remaining, AudioTrack.WRITE_BLOCKING)
+            val writeMs = elapsedMsSince(beforeWrite)
+            when {
+                written > 0 -> {
+                    if (written < remaining) stats.recordPartialWriteCall()
+                    stats.recordWrite(written, chunk.peak, chunkAgeMs, writeMs)
+                    offset += written
+                    noProgressWrites = 0
+                }
+                written == 0 -> {
+                    noProgressWrites += 1
+                    stats.recordZeroWrite(writeMs)
+                    if (noProgressWrites >= 3) {
+                        stats.recordDroppedRemainder(chunk.length - offset)
+                        return false
+                    }
+                    Thread.sleep(1)
+                }
+                else -> {
+                    stats.recordWriteError()
+                    stats.recordDroppedRemainder(chunk.length - offset)
+                    LogBus.w(TAG, "AudioTrack write failed with code $written after ${offset}/${chunk.length} bytes")
+                    return false
+                }
+            }
+        }
+        if (offset < chunk.length) {
+            stats.recordDroppedRemainder(chunk.length - offset)
+            return false
+        }
+        return true
     }
 
     private fun currentInputDevices(context: Context): List<AudioDeviceInfo> =
@@ -723,68 +765,25 @@ object AndroidUsbAudioBridge {
         }
     }
 
-    private data class PcmChunk(
-        val bytes: ByteArray,
-        val length: Int,
-        val createdAtMs: Long,
-        val sequence: Long,
-        val peak: Int,
-    )
+    private fun fmtMs(value: Double): String = String.format(Locale.US, "%.2f", value)
 
-    private class LatestPcmQueue(private val capacity: Int) {
-        private val lock = Object()
-        private val chunks = ArrayDeque<PcmChunk>()
-        private var closed = false
-
-        @Volatile var droppedStaleBytes = 0L
-            private set
-        @Volatile var droppedStaleChunks = 0L
-            private set
-
-        fun offer(chunk: PcmChunk) {
-            synchronized(lock) {
-                if (closed) return
-                while (chunks.size >= capacity) {
-                    val dropped = chunks.removeFirst()
-                    droppedStaleBytes += dropped.length.toLong()
-                    droppedStaleChunks += 1
-                }
-                chunks.addLast(chunk)
-                lock.notifyAll()
-            }
-        }
-
-        fun takeLatest(timeoutMs: Long): PcmChunk? {
-            synchronized(lock) {
-                if (chunks.isEmpty() && !closed) {
-                    try { lock.wait(timeoutMs) } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        return null
-                    }
-                }
-                if (chunks.isEmpty()) return null
-                while (chunks.size > 1) {
-                    val dropped = chunks.removeFirst()
-                    droppedStaleBytes += dropped.length.toLong()
-                    droppedStaleChunks += 1
-                }
-                return chunks.removeLast()
-            }
-        }
-
-        fun close() {
-            synchronized(lock) {
-                closed = true
-                chunks.clear()
-                lock.notifyAll()
-            }
-        }
+    private fun formatJitter(prefix: String, snapshot: PcmJitterSnapshot): String {
+        val watermarks = snapshot.watermarks
+        return "$prefix.targetMs=${watermarks.targetMs} $prefix.effectiveTargetMs=${watermarks.effectiveTargetMs} " +
+            "$prefix.bufferedMs=${fmtMs(snapshot.bufferedMs)} $prefix.chunks=${snapshot.chunks} " +
+            "$prefix.lowWaterMs=${fmtMs(watermarks.lowWaterMs)} $prefix.highWaterMs=${fmtMs(watermarks.highWaterMs)} " +
+            "$prefix.hardMaxMs=${fmtMs(watermarks.hardMaxMs)} $prefix.dropToMs=${fmtMs(watermarks.dropToMs)} " +
+            "$prefix.startWaitCount=${snapshot.startWaitCount} $prefix.rebufferCount=${snapshot.rebufferCount} " +
+            "$prefix.underrunCount=${snapshot.underrunCount} $prefix.overflowDropBytes=${snapshot.overflowDropBytes} " +
+            "$prefix.overflowDropChunks=${snapshot.overflowDropChunks} $prefix.fastForwardCount=${snapshot.fastForwardCount} " +
+            snapshot.bufferedLatency.format("${prefix}Buffered") + " " +
+            snapshot.consumerWaitLatency.format("${prefix}ConsumerWait")
     }
 
     private class InputStats(
         private val sampleRate: Int,
         private val bufferSize: Int,
-        private val queue: LatestPcmQueue,
+        private val jitterBuffer: PcmJitterBuffer,
     ) {
         private val startedAt = System.currentTimeMillis()
         private var lastLoggedAt = startedAt
@@ -835,9 +834,10 @@ object AndroidUsbAudioBridge {
             val read = readLatency.snapshot()
             val queueAge = queueAgeLatency.snapshot()
             val socketWrite = socketWriteLatency.snapshot()
+            val jitter = jitterBuffer.snapshot()
             LogBus.i(
                 TAG,
-                "$message rate=$sampleRate buffer=$bufferSize elapsed=${"%.1f".format(elapsedSeconds)}s bytesRead=$bytesRead bytesWritten=$bytesWritten reads=$reads writes=$writes lastSeq=$lastSequence shortReads=$shortReads readErrors=$readErrors zeroSamples=$zeroSamples/$totalSamples inputDroppedStaleBytes=${queue.droppedStaleBytes} inputDroppedStaleChunks=${queue.droppedStaleChunks} inputWriteOverruns=$writeOverruns ${read.format("inputRead")} ${queueAge.format("inputQueueAge")} ${socketWrite.format("inputSocketWrite")}"
+                "$message rate=$sampleRate buffer=$bufferSize elapsed=${"%.1f".format(elapsedSeconds)}s bytesRead=$bytesRead bytesWritten=$bytesWritten reads=$reads writes=$writes lastSeq=$lastSequence shortReads=$shortReads readErrors=$readErrors zeroSamples=$zeroSamples/$totalSamples inputWriteOverruns=$writeOverruns ${read.format("inputRead")} ${queueAge.format("inputChunkAge")} ${socketWrite.format("inputSocketWrite")} ${formatJitter("inputJitter", jitter)}"
             )
             lastLoggedAt = now
         }
@@ -846,7 +846,7 @@ object AndroidUsbAudioBridge {
     private class OutputStats(
         private val sampleRate: Int,
         private val bufferSize: Int,
-        private val queue: LatestPcmQueue,
+        private val jitterBuffer: PcmJitterBuffer,
     ) {
         private val startedAt = System.currentTimeMillis()
         private var lastLoggedAt = startedAt
@@ -855,10 +855,9 @@ object AndroidUsbAudioBridge {
         private var shortReads = 0L
         private var activeBytesWritten = 0L
         private var silentBytesSkipped = 0L
-        private var outputDroppedStaleBytes = 0L
-        private var outputDroppedPartialBytes = 0L
+        private var outputDroppedRemainderBytes = 0L
         private var flushCount = 0L
-        private var partialWrites = 0L
+        private var partialWriteCalls = 0L
         private var zeroWrites = 0L
         private var writeErrors = 0L
         private var activePeak = 0
@@ -879,11 +878,6 @@ object AndroidUsbAudioBridge {
             queueAgeLatency.record(chunkAgeMs.toDouble())
         }
 
-        @Synchronized fun recordDroppedStale(length: Int, chunkAgeMs: Long) {
-            outputDroppedStaleBytes += length.toLong()
-            queueAgeLatency.record(chunkAgeMs.toDouble())
-        }
-
         @Synchronized fun recordSilence(length: Int) {
             silentBytesSkipped += length.toLong()
         }
@@ -894,9 +888,16 @@ object AndroidUsbAudioBridge {
             audioTrackWriteLatency.record(audioTrackWriteMs)
         }
 
-        @Synchronized fun recordPartialWrite(droppedBytes: Int) {
-            partialWrites += 1
-            outputDroppedPartialBytes += droppedBytes.toLong()
+        @Synchronized fun recordPartialWriteCall() {
+            partialWriteCalls += 1
+        }
+
+        @Synchronized fun recordDroppedRemainder(droppedBytes: Int) {
+            if (droppedBytes > 0) outputDroppedRemainderBytes += droppedBytes.toLong()
+        }
+
+        @Synchronized fun recordWriteError() {
+            writeErrors += 1
         }
 
         @Synchronized fun recordZeroWrite(audioTrackWriteMs: Double) {
@@ -916,9 +917,10 @@ object AndroidUsbAudioBridge {
             val socketRead = socketReadLatency.snapshot()
             val queueAge = queueAgeLatency.snapshot()
             val audioTrackWrite = audioTrackWriteLatency.snapshot()
+            val jitter = jitterBuffer.snapshot()
             LogBus.i(
                 TAG,
-                "$message rate=$sampleRate buffer=$bufferSize elapsed=${"%.1f".format(elapsedSeconds)}s bytesRead=$bytesRead activeBytesWritten=$activeBytesWritten socketReads=$socketReads lastSeq=$lastSequence shortReads=$shortReads outputDroppedStaleBytes=${outputDroppedStaleBytes + queue.droppedStaleBytes} outputDroppedStaleChunks=${queue.droppedStaleChunks} outputDroppedPartialBytes=$outputDroppedPartialBytes silentBytesSkipped=$silentBytesSkipped flushCount=$flushCount partialWrites=$partialWrites zeroWrites=$zeroWrites writeErrors=$writeErrors activePeak=$activePeak ${socketRead.format("outputSocketRead")} ${queueAge.format("outputQueueAge")} ${audioTrackWrite.format("outputAudioTrackWrite")}"
+                "$message rate=$sampleRate buffer=$bufferSize elapsed=${"%.1f".format(elapsedSeconds)}s bytesRead=$bytesRead activeBytesWritten=$activeBytesWritten socketReads=$socketReads lastSeq=$lastSequence shortReads=$shortReads outputDroppedRemainderBytes=$outputDroppedRemainderBytes silentBytesSkipped=$silentBytesSkipped flushCount=$flushCount partialWriteCalls=$partialWriteCalls zeroWrites=$zeroWrites writeErrors=$writeErrors activePeak=$activePeak ${socketRead.format("outputSocketRead")} ${queueAge.format("outputChunkAge")} ${audioTrackWrite.format("outputAudioTrackWrite")} ${formatJitter("outputJitter", jitter)}"
             )
             lastLoggedAt = now
             activePeak = 0

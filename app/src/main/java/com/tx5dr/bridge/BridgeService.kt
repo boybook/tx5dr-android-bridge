@@ -161,8 +161,7 @@ class BridgeService : Service() {
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun foregroundServiceTypeMask(includeMicrophone: Boolean): Int {
-        var mask = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        var mask = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
         if (includeMicrophone && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             mask = mask or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE

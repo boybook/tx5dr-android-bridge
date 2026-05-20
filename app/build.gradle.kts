@@ -104,4 +104,5 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("org.apache.commons:commons-compress:1.26.2")
+    testImplementation("junit:junit:4.13.2")
 }
