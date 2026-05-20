@@ -11,6 +11,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.tx5dr.bridge.BridgeStatus
+import com.tx5dr.bridge.InstallProgress
+import com.tx5dr.bridge.InstallProgressStage
 import com.tx5dr.bridge.R
 import com.tx5dr.bridge.RuntimePhase
 import com.tx5dr.bridge.RuntimeState
@@ -51,7 +53,7 @@ internal fun statusVisual(status: BridgeStatus): StatusVisual {
         )
         status.runtimeState == RuntimeState.Installing -> StatusVisual(
             title = stringResource(R.string.runtime_installing),
-            subtitle = stringResource(R.string.runtime_installing_subtitle),
+            subtitle = installProgressSubtitle(status.installProgress),
             chip = stringResource(R.string.runtime_installing_chip),
             icon = Icons.Filled.HourglassTop,
             color = scheme.primary,
@@ -134,6 +136,30 @@ private fun runtimeStartingSubtitle(status: BridgeStatus): String = when (status
     RuntimePhase.WaitingServer -> stringResource(R.string.runtime_waiting_api_subtitle)
     RuntimePhase.WaitingWeb -> stringResource(R.string.runtime_waiting_web_subtitle)
     else -> stringResource(R.string.runtime_starting_subtitle)
+}
+
+@Composable
+private fun installProgressSubtitle(progress: InstallProgress?): String {
+    if (progress == null) return stringResource(R.string.runtime_installing_subtitle)
+    return when (progress.stage) {
+        InstallProgressStage.Preparing -> stringResource(R.string.install_progress_preparing)
+        InstallProgressStage.CopyingBase -> stringResource(R.string.install_progress_copying_base)
+        InstallProgressStage.FetchingManifest -> stringResource(R.string.install_progress_fetching_manifest)
+        InstallProgressStage.Downloading -> {
+            val done = formatBytes(progress.bytesDone)
+            val total = formatBytes(progress.bytesTotal)
+            if (progress.bytesPerSecond > 0) {
+                stringResource(R.string.install_progress_downloading_with_speed, done, total, formatBytes(progress.bytesPerSecond))
+            } else {
+                stringResource(R.string.install_progress_downloading, done, total)
+            }
+        }
+        InstallProgressStage.Verifying -> stringResource(R.string.install_progress_verifying, formatBytes(progress.bytesDone), formatBytes(progress.bytesTotal))
+        InstallProgressStage.ExtractingBase -> stringResource(R.string.install_progress_extracting_base, progress.entriesDone.coerceAtLeast(0))
+        InstallProgressStage.ExtractingRelease -> stringResource(R.string.install_progress_extracting_release, progress.entriesDone.coerceAtLeast(0))
+        InstallProgressStage.Activating -> stringResource(R.string.install_progress_activating)
+        InstallProgressStage.Complete -> stringResource(R.string.install_progress_complete)
+    }
 }
 
 @Composable

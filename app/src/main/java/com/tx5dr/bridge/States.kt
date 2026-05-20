@@ -15,6 +15,31 @@ enum class RuntimePhase {
 }
 enum class MicBridgeState { PermissionRequired, Stopped, Starting, Streaming, Error }
 
+enum class InstallProgressStage {
+    Preparing,
+    CopyingBase,
+    ExtractingBase,
+    FetchingManifest,
+    Downloading,
+    Verifying,
+    ExtractingRelease,
+    Activating,
+    Complete,
+}
+
+data class InstallProgress(
+    val stage: InstallProgressStage,
+    val artifactName: String? = null,
+    val bytesDone: Long = -1L,
+    val bytesTotal: Long = -1L,
+    val bytesPerSecond: Long = -1L,
+    val entriesDone: Int = -1,
+    val latestEntry: String? = null,
+) {
+    val fraction: Float?
+        get() = if (bytesTotal > 0 && bytesDone >= 0) (bytesDone.toDouble() / bytesTotal.toDouble()).coerceIn(0.0, 1.0).toFloat() else null
+}
+
 data class BridgeStatus(
     val runtimeState: RuntimeState = RuntimeState.NotInstalled,
     val runtimePhase: RuntimePhase = RuntimePhase.Idle,
@@ -28,6 +53,7 @@ data class BridgeStatus(
     val clientToolsHealthy: Boolean = false,
     val installedVersion: String? = null,
     val progress: String? = null,
+    val installProgress: InstallProgress? = null,
     val error: String? = null,
 )
 

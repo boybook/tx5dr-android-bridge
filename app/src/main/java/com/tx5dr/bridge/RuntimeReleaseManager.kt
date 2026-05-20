@@ -18,7 +18,7 @@ object RuntimeReleaseManager {
         "usr/local/bin/tx5dr-android-serial-pty",
     )
 
-    fun ensureBaseRuntime(context: Context, paths: RuntimePaths, progress: (String) -> Unit) {
+    fun ensureBaseRuntime(context: Context, paths: RuntimePaths, progress: (InstallProgress) -> Unit) {
         val expectedRootfsSha = readAssetTextOrNull(context, "rootfs/rootfs-debian13-arm64.tgz.sha256")
             ?.lineSequence()
             ?.firstOrNull()
@@ -26,25 +26,25 @@ object RuntimeReleaseManager {
             .orEmpty()
         if (!isBaseRuntimeCurrent(paths, expectedRootfsSha)) {
             if (paths.rootfsReady.exists()) {
-                progress("Embedded Debian rootfs changed or is missing bridge helpers; reinstalling base runtime")
+                progress(InstallProgress(InstallProgressStage.Preparing))
                 paths.rootfsDir.deleteRecursively()
                 paths.rootfsDir.mkdirs()
             }
             val archive = paths.cacheDir.resolve("rootfs-debian13-arm64.tgz")
-            progress("Copying embedded Debian 13 rootfs asset")
+            progress(InstallProgress(InstallProgressStage.CopyingBase, artifactName = archive.name))
             copyAsset(context, "rootfs/rootfs-debian13-arm64.tgz", archive, executable = false)
-            progress("Extracting rootfs archive; this can take several minutes")
-            val extraction = ExtractionProgress("Extracting rootfs", everyEntries = 5000, everyMs = 3000, progress)
+            progress(InstallProgress(InstallProgressStage.ExtractingBase, artifactName = archive.name, entriesDone = 0))
+            val extraction = ExtractionProgress(InstallProgressStage.ExtractingBase, archive.name, everyEntries = 5000, everyMs = 3000, progress)
             TarZstExtractor.extract(archive, paths.rootfsDir, { name -> extraction.onEntry(name) }, paths.zstdFile)
             paths.rootfsReady.writeText(expectedRootfsSha.ifBlank { System.currentTimeMillis().toString() })
-            progress("Base Debian rootfs ready (${extraction.count} entries)")
+            progress(InstallProgress(InstallProgressStage.ExtractingBase, artifactName = archive.name, entriesDone = extraction.count))
         } else {
             LogBus.i(TAG, "Base Debian rootfs already installed")
         }
     }
 
-    fun installTx5drRelease(paths: RuntimePaths, manifestUrl: String, progress: (String) -> Unit): String {
-        progress("Fetching release manifest: $manifestUrl")
+    fun installTx5drRelease(paths: RuntimePaths, manifestUrl: String, progress: (InstallProgress) -> Unit): String {
+        progress(InstallProgress(InstallProgressStage.FetchingManifest))
         val manifest = JSONObject(downloadText(manifestUrl))
         LogBus.i(TAG, "Manifest parsed: version=${manifest.optString("version", "unknown")} channel=${manifest.optString("channel", "unknown")}")
         val asset = selectAndroidAsset(manifest)
@@ -59,28 +59,28 @@ object RuntimeReleaseManager {
         if (expectedSize > 0 && archive.length() != expectedSize) {
             error("Downloaded size mismatch: expected ${formatBytes(expectedSize)}, got ${formatBytes(archive.length())}")
         }
-        progress("Verifying sha256: $name")
+        progress(InstallProgress(InstallProgressStage.Verifying, artifactName = name, bytesDone = 0, bytesTotal = archive.length()))
         val actual = sha256(archive, progress)
         require(actual == sha256) { "sha256 mismatch: expected $sha256, got $actual" }
-        progress("sha256 verified")
+        progress(InstallProgress(InstallProgressStage.Verifying, artifactName = name, bytesDone = archive.length(), bytesTotal = archive.length()))
 
         val version = manifest.optString("version", manifest.optString("commit", "unknown"))
         val releaseDir = paths.releasesDir.resolve(version.replace(Regex("[^A-Za-z0-9._-]"), "_"))
         val tmpDir = paths.releasesDir.resolve(".${releaseDir.name}.tmp")
         tmpDir.deleteRecursively()
         tmpDir.mkdirs()
-        progress("Extracting TX-5DR release ${releaseDir.name}")
-        val extraction = ExtractionProgress("Extracting TX-5DR", everyEntries = 5000, everyMs = 3000, progress)
+        progress(InstallProgress(InstallProgressStage.ExtractingRelease, artifactName = releaseDir.name, entriesDone = 0))
+        val extraction = ExtractionProgress(InstallProgressStage.ExtractingRelease, releaseDir.name, everyEntries = 5000, everyMs = 3000, progress)
         TarZstExtractor.extract(archive, tmpDir, { entry -> extraction.onEntry(entry) }, zstdHelper = paths.zstdFile)
-        progress("Extracted TX-5DR release ${releaseDir.name} (${extraction.count} entries)")
+        progress(InstallProgress(InstallProgressStage.ExtractingRelease, artifactName = releaseDir.name, entriesDone = extraction.count))
         val missing = missingReleaseFiles(tmpDir)
         require(missing.isEmpty()) { "Extracted TX-5DR release is missing expected runtime files: ${missing.joinToString(", ")}" }
         releaseDir.deleteRecursively()
-        progress("Activating release ${releaseDir.name}")
+        progress(InstallProgress(InstallProgressStage.Activating, artifactName = releaseDir.name))
         require(tmpDir.renameTo(releaseDir)) { "Failed to move release into place" }
         switchCurrent(paths, releaseDir)
         LogBus.i(TAG, "Current release points to ${releaseDir.absolutePath}")
-        progress("Installed TX-5DR release $version")
+        progress(InstallProgress(InstallProgressStage.Complete, artifactName = version))
         return version
     }
 
@@ -204,7 +204,7 @@ object RuntimeReleaseManager {
         }
     }
 
-    private fun downloadFile(url: String, target: File, progress: (String) -> Unit) {
+    private fun downloadFile(url: String, target: File, progress: (InstallProgress) -> Unit) {
         target.parentFile?.mkdirs()
         val part = File(target.parentFile, "${target.name}.part")
         part.delete()
@@ -220,7 +220,7 @@ object RuntimeReleaseManager {
             var lastLogAt = 0L
             var lastLogBytes = 0L
             var lastPercent = -1
-            progress("Downloading ${target.name}: 0 B/${formatBytes(total)}")
+            progress(InstallProgress(InstallProgressStage.Downloading, artifactName = target.name, bytesDone = 0, bytesTotal = total))
             BufferedInputStream(conn.inputStream).use { input ->
                 FileOutputStream(part).use { output ->
                     val buffer = ByteArray(1024 * 256)
@@ -243,21 +243,21 @@ object RuntimeReleaseManager {
                             lastLogBytes = downloaded
                             val elapsedSeconds = max(1L, (now - startedAt) / 1000L)
                             val speed = downloaded / elapsedSeconds
-                            progress("Downloading ${target.name}: ${formatBytes(downloaded)}/${formatBytes(total)}${formatPercent(percent)} at ${formatBytes(speed)}/s")
+                            progress(InstallProgress(InstallProgressStage.Downloading, artifactName = target.name, bytesDone = downloaded, bytesTotal = total, bytesPerSecond = speed))
                         }
                     }
                 }
             }
             target.delete()
             require(part.renameTo(target)) { "Failed to move downloaded file into cache" }
-            progress("Download complete: ${target.name} (${formatBytes(target.length())})")
+            progress(InstallProgress(InstallProgressStage.Downloading, artifactName = target.name, bytesDone = target.length(), bytesTotal = total))
         } finally {
             conn.disconnect()
             if (part.exists() && !target.exists()) part.delete()
         }
     }
 
-    private fun sha256(file: File, progress: (String) -> Unit): String {
+    private fun sha256(file: File, progress: (InstallProgress) -> Unit): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val total = file.length()
         var processed = 0L
@@ -275,7 +275,7 @@ object RuntimeReleaseManager {
                 if ((percent >= 0 && percent >= lastPercent + 10) || now - lastLogAt >= 3000L) {
                     lastPercent = max(lastPercent, percent)
                     lastLogAt = now
-                    progress("Verifying sha256: ${formatBytes(processed)}/${formatBytes(total)}${formatPercent(percent)}")
+                    progress(InstallProgress(InstallProgressStage.Verifying, artifactName = file.name, bytesDone = processed, bytesTotal = total))
                 }
             }
         }
@@ -301,10 +301,11 @@ object RuntimeReleaseManager {
     }
 
     private class ExtractionProgress(
-        private val label: String,
+        private val stage: InstallProgressStage,
+        private val artifactName: String,
         private val everyEntries: Int,
         private val everyMs: Long,
-        private val progress: (String) -> Unit,
+        private val progress: (InstallProgress) -> Unit,
     ) {
         var count = 0
             private set
@@ -319,7 +320,7 @@ object RuntimeReleaseManager {
             if (entryIntervalReached || timeIntervalReached) {
                 lastLogCount = count
                 lastLogAt = now
-                progress("$label: $count entries; latest ${compactPath(name)}")
+                progress(InstallProgress(stage, artifactName = artifactName, entriesDone = count, latestEntry = compactPath(name)))
             }
         }
 
@@ -328,8 +329,6 @@ object RuntimeReleaseManager {
             return "..." + path.takeLast(93)
         }
     }
-
-    private fun formatPercent(percent: Int): String = if (percent >= 0) " ($percent%)" else ""
 
     private fun formatBytes(value: Long): String {
         if (value < 0) return "unknown"

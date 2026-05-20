@@ -23,6 +23,16 @@
     <string name="runtime_exited_with_code_subtitle">サービスプロセスが終了しました。終了コード: %1$d。再試行するか診断を確認してください。</string>
     <string name="runtime_install_subtitle">初回使用前に Android ランタイムをダウンロードしてインストールします。</string>
     <string name="runtime_installing_subtitle">ランタイムをダウンロード、検証、準備しています。</string>
+    <string name="install_progress_preparing">ランタイムのインストールを準備しています。</string>
+    <string name="install_progress_copying_base">内蔵ベースランタイムをコピーしています。</string>
+    <string name="install_progress_fetching_manifest">リモートのバージョン情報を読み込んでいます。</string>
+    <string name="install_progress_downloading">ダウンロード中：%1$s / %2$s</string>
+    <string name="install_progress_downloading_with_speed">ダウンロード中：%1$s / %2$s · %3$s/s</string>
+    <string name="install_progress_verifying">検証中：%1$s / %2$s</string>
+    <string name="install_progress_extracting_base">ベースランタイムを展開中：%1$d ファイル</string>
+    <string name="install_progress_extracting_release">TX-5DR ランタイムを展開中：%1$d ファイル</string>
+    <string name="install_progress_activating">新しいランタイムに切り替えています。</string>
+    <string name="install_progress_complete">ランタイムのインストールが完了しました。</string>
     <string name="runtime_starting_subtitle">バックグラウンドサービスを起動し、ヘルスチェックを待っています。</string>
     <string name="runtime_stopping_subtitle">バックグラウンドプロセスを終了しています。</string>
     <string name="runtime_preparing_runtime_subtitle">ランタイム環境を準備しています。</string>

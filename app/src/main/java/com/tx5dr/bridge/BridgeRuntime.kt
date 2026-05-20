@@ -157,14 +157,20 @@ object BridgeRuntime {
         executor.execute {
             try {
                 LogBus.i(TAG, "Install/update started")
-                updateStatus(status.copy(runtimeState = RuntimeState.Installing, runtimePhase = RuntimePhase.PreparingRuntime, error = null, progress = "Preparing base runtime"))
+                updateStatus(status.copy(
+                    runtimeState = RuntimeState.Installing,
+                    runtimePhase = RuntimePhase.PreparingRuntime,
+                    error = null,
+                    progress = "Preparing base runtime",
+                    installProgress = InstallProgress(InstallProgressStage.Preparing),
+                ))
                 RuntimeReleaseManager.ensureBaseRuntime(app, paths, ::logProgress)
                 val version = RuntimeReleaseManager.installTx5drRelease(paths, getManifestUrl(), ::logProgress)
                 prefs.edit().putString("installedVersion", version).apply()
-                updateStatus(detectInitialStatus().copy(error = null, progress = "Install/update complete"))
+                updateStatus(detectInitialStatus().copy(error = null, progress = "Install/update complete", installProgress = null))
             } catch (error: Throwable) {
                 LogBus.e(TAG, "Install/update failed", error)
-                updateStatus(status.copy(runtimeState = RuntimeState.Error, runtimePhase = RuntimePhase.Error, error = error.message))
+                updateStatus(status.copy(runtimeState = RuntimeState.Error, runtimePhase = RuntimePhase.Error, error = error.message, installProgress = null))
             }
         }
     }
@@ -195,6 +201,7 @@ object BridgeRuntime {
                     clientToolsHealthy = false,
                     error = null,
                     progress = "Preparing runtime",
+                    installProgress = null,
                     startedAtMs = null,
                     lastExitCode = null,
                     lastExitReason = null,
@@ -485,9 +492,34 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
         }
     }
 
-    private fun logProgress(message: String) {
+    private fun logProgress(progress: InstallProgress) {
+        val message = describeInstallProgress(progress)
         LogBus.i(TAG, message)
-        updateStatus(status.copy(progress = message))
+        updateStatus(status.copy(progress = message, installProgress = progress))
+    }
+
+    private fun describeInstallProgress(progress: InstallProgress): String = when (progress.stage) {
+        InstallProgressStage.Preparing -> "Preparing runtime install"
+        InstallProgressStage.CopyingBase -> "Copying embedded Debian rootfs asset"
+        InstallProgressStage.ExtractingBase -> "Extracting rootfs: ${progress.entriesDone.coerceAtLeast(0)} entries"
+        InstallProgressStage.FetchingManifest -> "Fetching release manifest"
+        InstallProgressStage.Downloading -> "Downloading ${progress.artifactName.orEmpty()}: ${formatBytesForLog(progress.bytesDone)}/${formatBytesForLog(progress.bytesTotal)}"
+        InstallProgressStage.Verifying -> "Verifying sha256: ${formatBytesForLog(progress.bytesDone)}/${formatBytesForLog(progress.bytesTotal)}"
+        InstallProgressStage.ExtractingRelease -> "Extracting TX-5DR: ${progress.entriesDone.coerceAtLeast(0)} entries"
+        InstallProgressStage.Activating -> "Activating release ${progress.artifactName.orEmpty()}"
+        InstallProgressStage.Complete -> "Installed TX-5DR release ${progress.artifactName.orEmpty()}"
+    }
+
+    private fun formatBytesForLog(value: Long): String {
+        if (value < 0) return "unknown"
+        val units = arrayOf("B", "KiB", "MiB", "GiB")
+        var size = value.toDouble()
+        var unit = 0
+        while (size >= 1024.0 && unit < units.lastIndex) {
+            size /= 1024.0
+            unit += 1
+        }
+        return if (unit == 0) "$value ${units[unit]}" else String.format(java.util.Locale.US, "%.1f %s", size, units[unit])
     }
 
     private fun pipeOutput(process: Process, prefix: String) {

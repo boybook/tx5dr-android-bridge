@@ -477,7 +477,15 @@ private fun HeroStatusPanel(
         when {
             visual.busy -> {
                 Text(visual.subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LinearProgressIndicator(Modifier.fillMaxWidth(0.72f))
+                val installFraction = if (status.runtimeState == RuntimeState.Installing) status.installProgress?.fraction else null
+                if (installFraction != null) {
+                    LinearProgressIndicator(
+                        progress = { installFraction },
+                        modifier = Modifier.fillMaxWidth(0.72f),
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth(0.72f))
+                }
             }
             status.runtimeState == RuntimeState.Error || status.error != null -> {
                 Text(
