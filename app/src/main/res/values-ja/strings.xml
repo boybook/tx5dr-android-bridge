@@ -118,6 +118,14 @@
     <string name="recent_error">最近のエラー</string>
     <string name="auto_enter_tx5dr">起動後に自動で TX-5DR に入る</string>
     <string name="auto_enter_tx5dr_subtitle">オフの場合はバックグラウンドサービスのみ実行します。</string>
+    <string name="audio_buffer_target_title">オーディオバッファ</string>
+    <string name="audio_buffer_target_subtitle">値を下げると遅延は減りますが、一部の端末では underrun が起きる場合があります。変更後にオーディオブリッジを再接続します。</string>
+    <string name="audio_buffer_target_compatible">互換</string>
+    <string name="audio_buffer_target_standard">標準</string>
+    <string name="audio_buffer_target_low_latency">低遅延</string>
+    <string name="audio_buffer_target_aggressive">アグレッシブ</string>
+    <string name="audio_buffer_target_extreme">極低遅延</string>
+    <string name="audio_buffer_target_experimental">実験的</string>
     <string name="manifest_url">Manifest URL</string>
     <string name="refresh_lan">LAN を更新</string>
     <string name="refresh_lan_subtitle">ホットスポットと LAN のアクセスアドレスを更新します。</string>

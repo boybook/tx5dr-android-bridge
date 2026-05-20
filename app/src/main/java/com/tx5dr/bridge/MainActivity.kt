@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
     private var autoOpenWebView by mutableStateOf(true)
     private var serviceOnlyMode by mutableStateOf(false)
     private var keepAliveEnabled by mutableStateOf(false)
+    private var audioBufferTargetMs by mutableStateOf(BridgeRuntime.DEFAULT_AUDIO_BUFFER_TARGET_MS)
     private var showInstallDialog by mutableStateOf(false)
     private var releasePreview by mutableStateOf<ReleasePreview?>(null)
     private var releasePreviewError by mutableStateOf<String?>(null)
@@ -159,6 +160,7 @@ class MainActivity : ComponentActivity() {
                     adminToken = adminToken,
                     manifestUrl = manifestUrl,
                     autoOpenWebView = autoOpenWebView,
+                    audioBufferTargetMs = audioBufferTargetMs,
                     keepAliveEnabled = keepAliveEnabled,
                     showInstallDialog = showInstallDialog,
                     releasePreview = releasePreview,
@@ -193,6 +195,7 @@ class MainActivity : ComponentActivity() {
                         releasePreviewError = null
                     },
                     onAutoOpenWebViewChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, it) },
+                    onAudioBufferTargetChange = { updateAudioBufferTargetMs(it) },
                     onServiceOnlyModeChange = { value ->
                         setBooleanPreference(BridgeRuntime.PREF_SERVICE_ONLY_MODE, value)
                         if (value) releaseWebView()
@@ -264,10 +267,16 @@ class MainActivity : ComponentActivity() {
         autoOpenWebView = BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, true)
         serviceOnlyMode = BridgeRuntime.getPreference(BridgeRuntime.PREF_SERVICE_ONLY_MODE, false)
         keepAliveEnabled = BridgeRuntime.getPreference(BridgeRuntime.PREF_KEEP_ALIVE_ENABLED, false)
+        audioBufferTargetMs = BridgeRuntime.getAudioBufferTargetMs()
     }
 
     private fun setBooleanPreference(key: String, value: Boolean) {
         BridgeRuntime.setPreference(key, value)
+        loadPreferences()
+    }
+
+    private fun updateAudioBufferTargetMs(value: Int) {
+        audioBufferTargetMs = BridgeRuntime.setAudioBufferTargetMs(value)
         loadPreferences()
     }
 

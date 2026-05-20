@@ -76,10 +76,29 @@ object BridgeRuntime {
         prefs.edit().putBoolean(key, value).apply()
     }
 
+    fun getIntPreference(key: String, defaultValue: Int): Int = prefs.getInt(key, defaultValue)
+
+    fun setIntPreference(key: String, value: Int) {
+        prefs.edit().putInt(key, value).apply()
+    }
+
     fun getStringPreference(key: String, defaultValue: String): String = prefs.getString(key, defaultValue) ?: defaultValue
 
     fun setStringPreference(key: String, value: String) {
         prefs.edit().putString(key, value).apply()
+    }
+
+    fun getAudioBufferTargetMs(): Int =
+        coerceAudioBufferTargetMs(getIntPreference(PREF_AUDIO_BUFFER_TARGET_MS, DEFAULT_AUDIO_BUFFER_TARGET_MS))
+
+    fun setAudioBufferTargetMs(value: Int): Int {
+        val target = coerceAudioBufferTargetMs(value)
+        setIntPreference(PREF_AUDIO_BUFFER_TARGET_MS, target)
+        executor.execute {
+            runCatching { AndroidUsbAudioBridge.restartIfRunning(app) }
+                .onFailure { error -> LogBus.e(TAG, "Audio bridge restart after buffer change failed", error) }
+        }
+        return target
     }
 
     fun snapshotStatus(): BridgeStatus = status
@@ -997,4 +1016,11 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
     const val PREF_AUTO_OPEN_WEBVIEW = "autoOpenWebView"
     const val PREF_SERVICE_ONLY_MODE = "serviceOnlyMode"
     const val PREF_KEEP_ALIVE_ENABLED = "keepAliveEnabled"
+    const val PREF_AUDIO_BUFFER_TARGET_MS = "audioBufferTargetMs"
+    const val DEFAULT_AUDIO_BUFFER_TARGET_MS = 60
+
+    fun coerceAudioBufferTargetMs(value: Int): Int = when (value) {
+        10, 20, 30, 40, 60, 100 -> value
+        else -> DEFAULT_AUDIO_BUFFER_TARGET_MS
+    }
 }

@@ -118,6 +118,14 @@
     <string name="recent_error">Recent error</string>
     <string name="auto_enter_tx5dr">Automatically enter TX-5DR after startup</string>
     <string name="auto_enter_tx5dr_subtitle">When off, only the background service runs.</string>
+    <string name="audio_buffer_target_title">Audio buffer</string>
+    <string name="audio_buffer_target_subtitle">Lower values reduce delay but may underrun on some devices. Audio bridge reconnects after changes.</string>
+    <string name="audio_buffer_target_compatible">Compatible</string>
+    <string name="audio_buffer_target_standard">Standard</string>
+    <string name="audio_buffer_target_low_latency">Low latency</string>
+    <string name="audio_buffer_target_aggressive">Aggressive</string>
+    <string name="audio_buffer_target_extreme">Extreme</string>
+    <string name="audio_buffer_target_experimental">Experimental</string>
     <string name="manifest_url">Manifest URL</string>
     <string name="refresh_lan">Refresh LAN</string>
     <string name="refresh_lan_subtitle">Update hotspot and LAN access addresses.</string>

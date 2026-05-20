@@ -24,7 +24,8 @@ import kotlin.concurrent.thread
 object AndroidUsbSerialBridge {
     private const val TAG = "UsbSerialBridge"
     private const val ACTION_USB_PERMISSION = "com.tx5dr.bridge.USB_PERMISSION"
-    private const val READ_TIMEOUT_MS = 200
+    private const val STATS_INTERVAL_MS = 5000L
+    private const val READ_TIMEOUT_MS = 50
     private const val WRITE_TIMEOUT_MS = 2000
     private const val FRAME_DATA = 1
     private const val FRAME_CONFIG = 2
@@ -222,9 +223,20 @@ object AndroidUsbSerialBridge {
                         val buffer = ByteArray(4096)
                         while (session.running) {
                             try {
+                                val beforeRead = System.nanoTime()
                                 val n = session.port.read(buffer, READ_TIMEOUT_MS)
-                                if (n > 0) writeFrame(output, FRAME_DATA, buffer.copyOf(n))
+                                val readMs = elapsedMsSince(beforeRead)
+                                if (n > 0) {
+                                    session.stats.recordUsbRead(n, readMs)
+                                    val beforeSocketWrite = System.nanoTime()
+                                    writeFrame(output, FRAME_DATA, buffer.copyOf(n))
+                                    session.stats.recordSocketWrite(n, elapsedMsSince(beforeSocketWrite))
+                                } else {
+                                    session.stats.recordUsbReadTimeout(readMs)
+                                }
+                                session.stats.logIfDue(session.device.path)
                             } catch (error: Throwable) {
+                                session.stats.recordError()
                                 if (session.running) LogBus.w(TAG, "USB serial read failed for ${session.device.path}: ${error.message}")
                             }
                         }
@@ -237,16 +249,22 @@ object AndroidUsbSerialBridge {
                         val payload = ByteArray(length)
                         input.readFully(payload)
                         when (type) {
-                            FRAME_DATA -> session.port.write(payload, WRITE_TIMEOUT_MS)
+                            FRAME_DATA -> {
+                                val beforeWrite = System.nanoTime()
+                                session.port.write(payload, WRITE_TIMEOUT_MS)
+                                session.stats.recordUsbWrite(payload.size, elapsedMsSince(beforeWrite))
+                            }
                             FRAME_CONFIG -> handleConfig(session.port, payload, session.device.path)
                             FRAME_CONTROL -> handleControl(session.port, payload, session.device.path)
                             FRAME_STATUS -> LogBus.i(TAG, "serial helper status ${session.device.path}: ${payload.decodeToString()}")
                         }
+                        session.stats.logIfDue(session.device.path)
                     }
                 }
             }
         } catch (error: Throwable) {
             if (session.running) {
+                session.stats.recordError()
                 portErrors[session.device.virtualIndex] = error.message ?: error.javaClass.simpleName
                 LogBus.e(TAG, "USB serial bridge server failed for ${session.device.path}", error)
             }
@@ -301,6 +319,8 @@ object AndroidUsbSerialBridge {
         output.write(payload)
         output.flush()
     }
+
+    private fun elapsedMsSince(startNanos: Long): Double = (System.nanoTime() - startNanos) / 1_000_000.0
 
     private fun discoverPorts(context: Context): List<SerialPortCandidate> {
         val manager = context.applicationContext.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -452,6 +472,7 @@ object AndroidUsbSerialBridge {
         @Volatile var clientSocket: android.net.LocalSocket? = null
         @Volatile var serverThread: Thread? = null
         @Volatile var readThread: Thread? = null
+        val stats = SerialStats()
         val isAlive: Boolean get() = running && serverThread?.isAlive == true
 
         fun stop() {
@@ -462,6 +483,62 @@ object AndroidUsbSerialBridge {
             try { connection.close() } catch (_: Throwable) {}
             if (Thread.currentThread() != readThread) readThread?.join(500)
             if (Thread.currentThread() != serverThread) serverThread?.join(1500)
+        }
+    }
+
+    private class SerialStats {
+        private val startedAt = System.currentTimeMillis()
+        private var lastLoggedAt = startedAt
+        private var usbReadFrames = 0L
+        private var usbReadBytes = 0L
+        private var usbReadTimeouts = 0L
+        private var socketWriteFrames = 0L
+        private var socketWriteBytes = 0L
+        private var usbWriteFrames = 0L
+        private var usbWriteBytes = 0L
+        private var errors = 0L
+        private val usbReadLatency = LatencyWindow()
+        private val socketWriteLatency = LatencyWindow()
+        private val usbWriteLatency = LatencyWindow()
+
+        @Synchronized fun recordUsbRead(bytes: Int, readMs: Double) {
+            usbReadFrames += 1
+            usbReadBytes += bytes.toLong()
+            usbReadLatency.record(readMs)
+        }
+
+        @Synchronized fun recordUsbReadTimeout(_readMs: Double) {
+            usbReadTimeouts += 1
+        }
+
+        @Synchronized fun recordSocketWrite(bytes: Int, writeMs: Double) {
+            socketWriteFrames += 1
+            socketWriteBytes += bytes.toLong()
+            socketWriteLatency.record(writeMs)
+        }
+
+        @Synchronized fun recordUsbWrite(bytes: Int, writeMs: Double) {
+            usbWriteFrames += 1
+            usbWriteBytes += bytes.toLong()
+            usbWriteLatency.record(writeMs)
+        }
+
+        @Synchronized fun recordError() {
+            errors += 1
+        }
+
+        @Synchronized fun logIfDue(path: String) {
+            val now = System.currentTimeMillis()
+            if (now - lastLoggedAt < STATS_INTERVAL_MS) return
+            val elapsedSeconds = ((now - startedAt).coerceAtLeast(1)).toDouble() / 1000.0
+            val read = usbReadLatency.snapshot()
+            val socketWrite = socketWriteLatency.snapshot()
+            val usbWrite = usbWriteLatency.snapshot()
+            LogBus.i(
+                TAG,
+                "USB serial stats path=$path elapsed=${"%.1f".format(elapsedSeconds)}s readFrames=$usbReadFrames readBytes=$usbReadBytes readTimeouts=$usbReadTimeouts socketWriteFrames=$socketWriteFrames socketWriteBytes=$socketWriteBytes usbWriteFrames=$usbWriteFrames usbWriteBytes=$usbWriteBytes errors=$errors ${read.format("serialUsbRead")} ${socketWrite.format("serialSocketWrite")} ${usbWrite.format("serialUsbWrite")}"
+            )
+            lastLoggedAt = now
         }
     }
 }

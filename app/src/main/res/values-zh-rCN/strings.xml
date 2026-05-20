@@ -118,6 +118,14 @@
     <string name="recent_error">最近错误</string>
     <string name="auto_enter_tx5dr">启动后自动进入 TX-5DR</string>
     <string name="auto_enter_tx5dr_subtitle">关闭后仅运行后台服务。</string>
+    <string name="audio_buffer_target_title">音频缓冲</string>
+    <string name="audio_buffer_target_subtitle">数值越低延迟越小，但部分设备可能出现 underrun；修改后会重连音频桥。</string>
+    <string name="audio_buffer_target_compatible">兼容</string>
+    <string name="audio_buffer_target_standard">标准</string>
+    <string name="audio_buffer_target_low_latency">低延迟</string>
+    <string name="audio_buffer_target_aggressive">激进</string>
+    <string name="audio_buffer_target_extreme">极低</string>
+    <string name="audio_buffer_target_experimental">实验</string>
     <string name="manifest_url">Manifest URL</string>
     <string name="refresh_lan">刷新 LAN</string>
     <string name="refresh_lan_subtitle">更新热点和局域网访问地址。</string>

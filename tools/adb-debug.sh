@@ -30,6 +30,7 @@ Commands:
   dns-smoke               Check PRoot /etc/resolv.conf, DNS lookup, and HTTPS reachability
   audio-smoke [seconds]   Inspect Android audio manifest and Unix sockets
   output-smoke [seconds]  Inspect Android audio output sockets and recent logs
+  serial-smoke [seconds]  Inspect Android serial manifest, PTYs, sockets, and recent latency stats
   start-mic               Alias for start-usb-audio
   stop-mic                Alias for stop-usb-audio
   set-manifest <url>      Save manifest URL without installing
@@ -44,6 +45,13 @@ run_debug_action() {
   local action="$1"
   shift || true
   "$ADB" shell am start -W -n "$DEBUG_ACTIVITY" -a "$action" "$@" >/dev/null
+}
+
+print_audio_buffer_target() {
+  local raw
+  raw="$("$ADB" shell "run-as $PKG sh -c 'grep -o \"<int name=\\\"audioBufferTargetMs\\\" value=\\\"[0-9]*\\\"\" shared_prefs/bridge.xml 2>/dev/null | sed -E \"s/.*value=\\\"([0-9]+)\\\"/\\1/\" | tail -1'" | tr -d '\r' || true)"
+  if [[ -z "$raw" ]]; then raw="60"; fi
+  echo "Audio buffer target: ${raw}ms"
 }
 
 write_and_run_proot_script() {
@@ -162,18 +170,36 @@ INNER
     rm -f "$tmp_script"
     ;;
   audio-smoke)
+    seconds="${2:-0}"
+    print_audio_buffer_target
     tmp_script="$(mktemp)"
     make_proot_script "cat /opt/tx5dr-data/runtime/android-audio-devices.json; echo; ss -lx | grep tx5dr-data || true" "$tmp_script"
     write_and_run_proot_script "$tmp_script"
     rm -f "$tmp_script"
+    if [[ "$seconds" =~ ^[0-9]+$ && "$seconds" -gt 0 ]]; then sleep "$seconds"; fi
+    echo "Recent audio bridge stats:"
+    "$ADB" logcat -d -v time -s "${LOG_TAGS[@]}" | grep -E "Android audio (input|output) stats|Audio (input|output) available|TX-5DR Android (input|output) backend connected|USB audio .* failed" | tail -40 || true
     ;;
   output-smoke)
+    seconds="${2:-0}"
+    print_audio_buffer_target
     tmp_script="$(mktemp)"
     make_proot_script "cat /opt/tx5dr-data/runtime/android-audio-devices.json; echo; ss -lx | grep tx5dr-data || true" "$tmp_script"
     write_and_run_proot_script "$tmp_script"
     rm -f "$tmp_script"
+    if [[ "$seconds" =~ ^[0-9]+$ && "$seconds" -gt 0 ]]; then sleep "$seconds"; fi
     echo "Recent output bridge stats:"
     "$ADB" logcat -d -v time -s "${LOG_TAGS[@]}" | grep -E "Android audio output stats|Android output backend connected|Android audio output client ended|USB audio output bridge failed" | tail -20 || true
+    ;;
+  serial-smoke)
+    seconds="${2:-0}"
+    tmp_script="$(mktemp)"
+    make_proot_script "cat /opt/tx5dr-data/runtime/android-serial-devices.json; echo; ls -l /opt/tx5dr-data/android-dev 2>/dev/null || true; echo; ss -lx | grep tx5dr-data || true" "$tmp_script"
+    write_and_run_proot_script "$tmp_script"
+    rm -f "$tmp_script"
+    if [[ "$seconds" =~ ^[0-9]+$ && "$seconds" -gt 0 ]]; then sleep "$seconds"; fi
+    echo "Recent serial bridge stats:"
+    "$ADB" logcat -d -v time -s "${LOG_TAGS[@]}" | grep -E "USB serial stats|USB serial bridge waiting|Linux serial PTY helper connected|USB serial read failed|USB serial bridge server failed" | tail -40 || true
     ;;
   set-manifest)
     [[ -n "${2:-}" ]] || { echo "set-manifest requires a URL" >&2; exit 2; }

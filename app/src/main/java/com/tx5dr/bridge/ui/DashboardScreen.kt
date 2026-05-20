@@ -113,6 +113,7 @@ fun DashboardScreen(
     adminToken: String?,
     manifestUrl: String,
     autoOpenWebView: Boolean,
+    audioBufferTargetMs: Int,
     keepAliveEnabled: Boolean,
     showInstallDialog: Boolean,
     releasePreview: ReleasePreview?,
@@ -143,6 +144,7 @@ fun DashboardScreen(
     onRefreshLan: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
+    onAudioBufferTargetChange: (Int) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
 ) {
     var detailSheet by remember { mutableStateOf<DetailSheet?>(null) }
@@ -264,8 +266,10 @@ fun DashboardScreen(
             when (detailSheet) {
                 DetailSheet.Audio -> AudioDetailSheet(
                     status = usbAudioStatus,
+                    audioBufferTargetMs = audioBufferTargetMs,
                     onDismiss = { detailSheet = null },
                     onAuthorizeAudio = onAuthorizeAudio,
+                    onAudioBufferTargetChange = onAudioBufferTargetChange,
                     onShowDiagnostics = {
                         detailSheet = null
                         onShowLogs()
@@ -987,6 +991,48 @@ private fun SettingsSheet(
     }
 }
 
+@Composable
+private fun AudioBufferSettingsCard(selectedMs: Int, onSelect: (Int) -> Unit) {
+    SettingsGroup {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                stringResource(R.string.audio_buffer_target_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                stringResource(R.string.audio_buffer_target_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AudioBufferChip(100, stringResource(R.string.audio_buffer_target_compatible), selectedMs, onSelect)
+                AudioBufferChip(60, stringResource(R.string.audio_buffer_target_standard), selectedMs, onSelect)
+                AudioBufferChip(40, stringResource(R.string.audio_buffer_target_low_latency), selectedMs, onSelect)
+                AudioBufferChip(30, stringResource(R.string.audio_buffer_target_aggressive), selectedMs, onSelect)
+                AudioBufferChip(20, stringResource(R.string.audio_buffer_target_extreme), selectedMs, onSelect)
+                AudioBufferChip(10, stringResource(R.string.audio_buffer_target_experimental), selectedMs, onSelect)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioBufferChip(valueMs: Int, label: String, selectedMs: Int, onSelect: (Int) -> Unit) {
+    AssistChip(
+        onClick = { onSelect(valueMs) },
+        label = { Text("$label · ${valueMs}ms") },
+        leadingIcon = if (valueMs == selectedMs) {
+            { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
+        } else {
+            null
+        },
+    )
+}
+
 
 @Composable
 private fun DataDirectorySettingsCard(
@@ -1157,8 +1203,10 @@ private fun SettingsAction(
 @Composable
 private fun AudioDetailSheet(
     status: UsbAudioStatus,
+    audioBufferTargetMs: Int,
     onDismiss: () -> Unit,
     onAuthorizeAudio: () -> Unit,
+    onAudioBufferTargetChange: (Int) -> Unit,
     onShowDiagnostics: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1176,6 +1224,10 @@ private fun AudioDetailSheet(
                 stringResource(R.string.audio_devices_available_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            AudioBufferSettingsCard(
+                selectedMs = audioBufferTargetMs,
+                onSelect = onAudioBufferTargetChange,
             )
             AudioDeviceListSection(
                 title = stringResource(R.string.audio_input_devices),
