@@ -20,11 +20,71 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.math.roundToInt
+
+
+internal const val ANDROID_AUDIO_OUTPUT_HEADER_BYTES = 16
+private val ANDROID_AUDIO_OUTPUT_HEADER_MAGIC = byteArrayOf(
+    'T'.code.toByte(), 'X'.code.toByte(), '5'.code.toByte(), 'D'.code.toByte(),
+    'R'.code.toByte(), 'A'.code.toByte(), 'O'.code.toByte(), '1'.code.toByte(),
+)
+
+internal enum class AndroidAudioOutputPcmFormat(
+    val id: Int,
+    val label: String,
+    val encoding: Int,
+    val bytesPerSample: Int,
+) {
+    S16LE(1, "s16le", AudioFormat.ENCODING_PCM_16BIT, 2),
+    F32LE(2, "f32le", AudioFormat.ENCODING_PCM_FLOAT, 4),
+}
+
+internal data class AndroidAudioOutputStreamHeader(
+    val sampleRate: Int,
+    val format: AndroidAudioOutputPcmFormat,
+    val channels: Int,
+)
+
+internal sealed class AndroidAudioOutputHeaderParseResult {
+    data class Header(val header: AndroidAudioOutputStreamHeader) : AndroidAudioOutputHeaderParseResult()
+    data object Legacy : AndroidAudioOutputHeaderParseResult()
+    data class Invalid(val reason: String) : AndroidAudioOutputHeaderParseResult()
+}
+
+internal fun parseAndroidAudioOutputHeader(bytes: ByteArray): AndroidAudioOutputHeaderParseResult {
+    if (bytes.size < ANDROID_AUDIO_OUTPUT_HEADER_BYTES) {
+        return AndroidAudioOutputHeaderParseResult.Invalid("short header: ${bytes.size}/$ANDROID_AUDIO_OUTPUT_HEADER_BYTES bytes")
+    }
+    for (i in ANDROID_AUDIO_OUTPUT_HEADER_MAGIC.indices) {
+        if (bytes[i] != ANDROID_AUDIO_OUTPUT_HEADER_MAGIC[i]) return AndroidAudioOutputHeaderParseResult.Legacy
+    }
+    val sampleRate = readUInt32Le(bytes, 8)
+    if (sampleRate !in 8_000..192_000) {
+        return AndroidAudioOutputHeaderParseResult.Invalid("unsupported sampleRate=$sampleRate")
+    }
+    val formatId = bytes[12].toInt() and 0xff
+    val format = AndroidAudioOutputPcmFormat.entries.firstOrNull { it.id == formatId }
+        ?: return AndroidAudioOutputHeaderParseResult.Invalid("unsupported formatId=$formatId")
+    val channels = bytes[13].toInt() and 0xff
+    if (channels != 1) {
+        return AndroidAudioOutputHeaderParseResult.Invalid("unsupported channels=$channels")
+    }
+    return AndroidAudioOutputHeaderParseResult.Header(AndroidAudioOutputStreamHeader(sampleRate, format, channels))
+}
+
+private fun readUInt32Le(bytes: ByteArray, offset: Int): Int {
+    val value = (bytes[offset].toLong() and 0xffL) or
+        ((bytes[offset + 1].toLong() and 0xffL) shl 8) or
+        ((bytes[offset + 2].toLong() and 0xffL) shl 16) or
+        ((bytes[offset + 3].toLong() and 0xffL) shl 24)
+    return value.toInt()
+}
 
 object AudioRoute {
     const val USB = "usb"
@@ -353,25 +413,56 @@ object AndroidUsbAudioBridge {
     private fun outputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: UsbAudioDevice, session: AudioSocketSession) {
         setAudioThreadPriority("output-${device.id}")
         try {
-            val rate = choosePlaybackRate(device)
-            val minBuffer = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val targetMs = bufferTargetMs()
-            val bufferSize = bufferSizeFor(rate, minBuffer, targetMs)
-            val format = AudioFormat.Builder()
-                .setSampleRate(rate)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .build()
             val attrs = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
             AndroidUnixSocketServer(androidSocketFile(bridgeDevice.socketPath)).use { server ->
                 session.server = server
-                LogBus.i(TAG, "Audio output available on ${bridgeDevice.socketPath} device=${device.describe()} rate=$rate buffer=$bufferSize target=${targetMs}ms")
+                LogBus.i(TAG, "Audio output available on ${bridgeDevice.socketPath} device=${device.describe()} legacyRate=${choosePlaybackRate(device)} target=${targetMs}ms")
                 while (running && session.running) {
                     try {
                         server.accept().use { socket ->
+                            val input = socket.getInputStream()
+                            val prefix = readExactly(input, ANDROID_AUDIO_OUTPUT_HEADER_BYTES)
+                            if (prefix == null) {
+                                LogBus.w(TAG, "Android audio output client closed before stream header for ${bridgeDevice.name}")
+                                return@use
+                            }
+                            val legacyHeader = AndroidAudioOutputStreamHeader(
+                                sampleRate = choosePlaybackRate(device),
+                                format = AndroidAudioOutputPcmFormat.S16LE,
+                                channels = 1,
+                            )
+                            val headerResult = parseAndroidAudioOutputHeader(prefix)
+                            val streamHeader = when (headerResult) {
+                                is AndroidAudioOutputHeaderParseResult.Header -> headerResult.header
+                                AndroidAudioOutputHeaderParseResult.Legacy -> legacyHeader
+                                is AndroidAudioOutputHeaderParseResult.Invalid -> {
+                                    LogBus.e(TAG, "Invalid Android audio output stream header for ${bridgeDevice.name}: ${headerResult.reason}")
+                                    return@use
+                                }
+                            }
+                            val legacyPrefix = if (headerResult is AndroidAudioOutputHeaderParseResult.Legacy) prefix else null
+                            val minBuffer = AudioTrack.getMinBufferSize(
+                                streamHeader.sampleRate,
+                                AudioFormat.CHANNEL_OUT_MONO,
+                                streamHeader.format.encoding,
+                            )
+                            if (minBuffer <= 0) {
+                                LogBus.e(
+                                    TAG,
+                                    "Unsupported Android AudioTrack output contract device=${bridgeDevice.name} rate=${streamHeader.sampleRate} format=${streamHeader.format.label} channels=${streamHeader.channels} minBuffer=$minBuffer",
+                                )
+                                return@use
+                            }
+                            val bufferSize = bufferSizeFor(streamHeader.sampleRate, minBuffer, targetMs, streamHeader.format.bytesPerSample)
+                            val format = AudioFormat.Builder()
+                                .setSampleRate(streamHeader.sampleRate)
+                                .setEncoding(streamHeader.format.encoding)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build()
                             val trackBuilder = AudioTrack.Builder()
                                 .setAudioAttributes(attrs)
                                 .setAudioFormat(format)
@@ -384,25 +475,46 @@ object AndroidUsbAudioBridge {
                             if (Build.VERSION.SDK_INT >= 23) track.preferredDevice = device
                             if (track.state != AudioTrack.STATE_INITIALIZED) {
                                 track.release()
-                                error("AudioTrack failed to initialize")
+                                LogBus.e(
+                                    TAG,
+                                    "AudioTrack failed to initialize for device=${bridgeDevice.name} rate=${streamHeader.sampleRate} format=${streamHeader.format.label} channels=${streamHeader.channels} buffer=$bufferSize",
+                                )
+                                return@use
                             }
                             markDeviceConnected("output", bridgeDevice.id, true)
-                            LogBus.i(TAG, "TX-5DR Android output backend connected: ${bridgeDevice.name}")
+                            LogBus.i(
+                                TAG,
+                                "TX-5DR Android output backend connected: ${bridgeDevice.name} device=${device.describe()} rate=${streamHeader.sampleRate} encoding=${streamHeader.format.label}/${streamHeader.format.encoding} channelMask=MONO buffer=$bufferSize minBuffer=$minBuffer legacy=${legacyPrefix != null}",
+                            )
                             val jitterBuffer = PcmJitterBuffer(
-                                sampleRate = rate,
+                                sampleRate = streamHeader.sampleRate,
                                 targetMs = targetMs,
-                                nominalChunkBytes = PcmJitterBuffer.logicalChunkBytes(rate, targetMs),
+                                nominalChunkBytes = PcmJitterBuffer.logicalChunkBytes(streamHeader.sampleRate, targetMs, streamHeader.format.bytesPerSample),
                                 mode = PcmJitterMode.OUTPUT,
+                                bytesPerSample = streamHeader.format.bytesPerSample,
                             )
                             val connected = AtomicBoolean(true)
                             val readerError = AtomicReference<Throwable?>(null)
-                            val stats = OutputStats(rate, bufferSize, jitterBuffer)
+                            val stats = OutputStats(streamHeader.sampleRate, streamHeader.format.label, streamHeader.format.bytesPerSample, bufferSize, jitterBuffer)
+                            var nextSequence = 0L
+                            if (legacyPrefix != null) {
+                                stats.recordSocketRead(legacyPrefix.size, 0.0, nextSequence)
+                                jitterBuffer.offer(
+                                    PcmChunk(
+                                        legacyPrefix,
+                                        legacyPrefix.size,
+                                        System.currentTimeMillis(),
+                                        nextSequence++,
+                                        peakAbsPcm(legacyPrefix, legacyPrefix.size, streamHeader.format),
+                                    )
+                                )
+                            }
                             val readerThread = Thread {
                                 setAudioThreadPriority("output-reader-${device.id}")
                                 val buffer = ByteArray(bufferSize)
-                                var sequence = 0L
+                                var sequence = nextSequence
+                                var tail = ByteArray(0)
                                 try {
-                                    val input = socket.getInputStream()
                                     while (running && session.running && connected.get() && !Thread.currentThread().isInterrupted) {
                                         if (!jitterBuffer.waitForProducerRoom(50)) {
                                             stats.logIfDue("Android audio output stats")
@@ -413,7 +525,15 @@ object AndroidUsbAudioBridge {
                                         val readMs = elapsedMsSince(beforeRead)
                                         if (n <= 0) break
                                         stats.recordSocketRead(n, readMs, sequence)
-                                        jitterBuffer.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
+                                        val raw = if (tail.isEmpty()) buffer.copyOf(n) else tail + buffer.copyOf(n)
+                                        val alignedLength = raw.size - (raw.size % streamHeader.format.bytesPerSample)
+                                        tail = if (alignedLength < raw.size) raw.copyOfRange(alignedLength, raw.size) else ByteArray(0)
+                                        if (alignedLength <= 0) {
+                                            stats.logIfDue("Android audio output stats")
+                                            continue
+                                        }
+                                        val pcm = raw.copyOf(alignedLength)
+                                        jitterBuffer.offer(PcmChunk(pcm, pcm.size, System.currentTimeMillis(), sequence++, peakAbsPcm(pcm, pcm.size, streamHeader.format)))
                                         stats.logIfDue("Android audio output stats")
                                     }
                                 } catch (error: Throwable) {
@@ -458,7 +578,7 @@ object AndroidUsbAudioBridge {
                                         stats.recordFlush()
                                     }
 
-                                    if (!writePcmFully(track, chunk, stats, connected, session, ageMs)) break
+                                    if (!writePcmFully(track, chunk, streamHeader.format, stats, connected, session, ageMs)) break
                                     stats.logIfDue("Android audio output stats")
                                 }
                             } finally {
@@ -497,6 +617,19 @@ object AndroidUsbAudioBridge {
     private fun writePcmFully(
         track: AudioTrack,
         chunk: PcmChunk,
+        format: AndroidAudioOutputPcmFormat,
+        stats: OutputStats,
+        connected: AtomicBoolean,
+        session: AudioSocketSession,
+        chunkAgeMs: Long,
+    ): Boolean = when (format) {
+        AndroidAudioOutputPcmFormat.S16LE -> writeS16LeFully(track, chunk, stats, connected, session, chunkAgeMs)
+        AndroidAudioOutputPcmFormat.F32LE -> writeFloat32LeFully(track, chunk, stats, connected, session, chunkAgeMs)
+    }
+
+    private fun writeS16LeFully(
+        track: AudioTrack,
+        chunk: PcmChunk,
         stats: OutputStats,
         connected: AtomicBoolean,
         session: AudioSocketSession,
@@ -528,13 +661,60 @@ object AndroidUsbAudioBridge {
                 else -> {
                     stats.recordWriteError()
                     stats.recordDroppedRemainder(chunk.length - offset)
-                    LogBus.w(TAG, "AudioTrack write failed with code $written after ${offset}/${chunk.length} bytes")
+                    LogBus.w(TAG, "AudioTrack int16 write failed with code $written after ${offset}/${chunk.length} bytes")
                     return false
                 }
             }
         }
         if (offset < chunk.length) {
             stats.recordDroppedRemainder(chunk.length - offset)
+            return false
+        }
+        return true
+    }
+
+    private fun writeFloat32LeFully(
+        track: AudioTrack,
+        chunk: PcmChunk,
+        stats: OutputStats,
+        connected: AtomicBoolean,
+        session: AudioSocketSession,
+        chunkAgeMs: Long,
+    ): Boolean {
+        val samples = float32LeToFloatArray(chunk.bytes, chunk.length)
+        var sampleOffset = 0
+        var noProgressWrites = 0
+        while (sampleOffset < samples.size && running && session.running && connected.get()) {
+            val remainingSamples = samples.size - sampleOffset
+            val beforeWrite = System.nanoTime()
+            val writtenSamples = track.write(samples, sampleOffset, remainingSamples, AudioTrack.WRITE_BLOCKING)
+            val writeMs = elapsedMsSince(beforeWrite)
+            when {
+                writtenSamples > 0 -> {
+                    if (writtenSamples < remainingSamples) stats.recordPartialWriteCall()
+                    stats.recordWrite(writtenSamples * AndroidAudioOutputPcmFormat.F32LE.bytesPerSample, chunk.peak, chunkAgeMs, writeMs)
+                    sampleOffset += writtenSamples
+                    noProgressWrites = 0
+                }
+                writtenSamples == 0 -> {
+                    noProgressWrites += 1
+                    stats.recordZeroWrite(writeMs)
+                    if (noProgressWrites >= 3) {
+                        stats.recordDroppedRemainder((samples.size - sampleOffset) * AndroidAudioOutputPcmFormat.F32LE.bytesPerSample)
+                        return false
+                    }
+                    Thread.sleep(1)
+                }
+                else -> {
+                    stats.recordWriteError()
+                    stats.recordDroppedRemainder((samples.size - sampleOffset) * AndroidAudioOutputPcmFormat.F32LE.bytesPerSample)
+                    LogBus.w(TAG, "AudioTrack float32 write failed with code $writtenSamples after ${sampleOffset}/${samples.size} samples")
+                    return false
+                }
+            }
+        }
+        if (sampleOffset < samples.size) {
+            stats.recordDroppedRemainder((samples.size - sampleOffset) * AndroidAudioOutputPcmFormat.F32LE.bytesPerSample)
             return false
         }
         return true
@@ -630,6 +810,7 @@ object AndroidUsbAudioBridge {
             .put("sampleRate", preferredSampleRate(device.sampleRates))
             .put("sampleRates", JSONArray(device.sampleRates.ifEmpty { sampleRates.toList() }))
             .put("format", "s16le")
+            .put("formats", JSONArray(listOf("s16le", "f32le")))
             .put("socketPath", device.socketPath)
             .put("available", true)
             .put("isDefault", isDefault)
@@ -637,6 +818,7 @@ object AndroidUsbAudioBridge {
             .put("updatedAt", System.currentTimeMillis())
             .put("socketDir", "/opt/tx5dr-data/runtime/sockets")
             .put("format", "s16le")
+            .put("formats", JSONArray(listOf("s16le", "f32le")))
             .put("channels", 1)
             .put("bufferTargetMs", bufferTargetMs())
         val inputArray = JSONArray()
@@ -725,12 +907,28 @@ object AndroidUsbAudioBridge {
 
     private fun bufferTargetMs(): Int = BridgeRuntime.getAudioBufferTargetMs()
 
-    private fun bufferSizeFor(sampleRate: Int, minBuffer: Int, targetMs: Int): Int =
-        maxOf(minBuffer, sampleRate * targetMs / 1000 * 2)
+    internal fun bufferSizeFor(sampleRate: Int, minBuffer: Int, targetMs: Int, bytesPerSample: Int = 2): Int =
+        maxOf(minBuffer, sampleRate * targetMs / 1000 * bytesPerSample)
 
     private fun setAudioThreadPriority(label: String) {
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
             .onFailure { LogBus.w(TAG, "Unable to set audio thread priority for $label: ${it.message}") }
+    }
+
+    private fun readExactly(input: InputStream, length: Int): ByteArray? {
+        val buffer = ByteArray(length)
+        var offset = 0
+        while (offset < length) {
+            val n = input.read(buffer, offset, length - offset)
+            if (n <= 0) return null
+            offset += n
+        }
+        return buffer
+    }
+
+    private fun peakAbsPcm(buffer: ByteArray, length: Int, format: AndroidAudioOutputPcmFormat): Int = when (format) {
+        AndroidAudioOutputPcmFormat.S16LE -> peakAbsPcm16(buffer, length)
+        AndroidAudioOutputPcmFormat.F32LE -> peakAbsFloat32(buffer, length)
     }
 
     private fun peakAbsPcm16(buffer: ByteArray, length: Int): Int {
@@ -742,6 +940,38 @@ object AndroidUsbAudioBridge {
             val absValue = if (signed == Short.MIN_VALUE.toInt()) 32768 else abs(signed)
             if (absValue > peak) peak = absValue
             offset += 2
+        }
+        return peak
+    }
+
+    private fun float32LeToFloatArray(buffer: ByteArray, length: Int): FloatArray {
+        val samples = FloatArray(length / AndroidAudioOutputPcmFormat.F32LE.bytesPerSample)
+        var offset = 0
+        var index = 0
+        while (offset + 3 < length) {
+            val bits = (buffer[offset].toInt() and 0xff) or
+                ((buffer[offset + 1].toInt() and 0xff) shl 8) or
+                ((buffer[offset + 2].toInt() and 0xff) shl 16) or
+                ((buffer[offset + 3].toInt() and 0xff) shl 24)
+            samples[index++] = java.lang.Float.intBitsToFloat(bits)
+            offset += 4
+        }
+        return samples
+    }
+
+    private fun peakAbsFloat32(buffer: ByteArray, length: Int): Int {
+        var peak = 0
+        var offset = 0
+        while (offset + 3 < length) {
+            val bits = (buffer[offset].toInt() and 0xff) or
+                ((buffer[offset + 1].toInt() and 0xff) shl 8) or
+                ((buffer[offset + 2].toInt() and 0xff) shl 16) or
+                ((buffer[offset + 3].toInt() and 0xff) shl 24)
+            val sample = java.lang.Float.intBitsToFloat(bits)
+            val absValue = if (sample.isFinite()) abs(sample).coerceAtMost(1f) else 0f
+            val scaled = (absValue * 32767f).roundToInt()
+            if (scaled > peak) peak = scaled
+            offset += 4
         }
         return peak
     }
@@ -845,6 +1075,8 @@ object AndroidUsbAudioBridge {
 
     private class OutputStats(
         private val sampleRate: Int,
+        private val format: String,
+        private val bytesPerSample: Int,
         private val bufferSize: Int,
         private val jitterBuffer: PcmJitterBuffer,
     ) {
@@ -854,6 +1086,7 @@ object AndroidUsbAudioBridge {
         private var socketReads = 0L
         private var shortReads = 0L
         private var activeBytesWritten = 0L
+        private var activeSamplesWritten = 0L
         private var silentBytesSkipped = 0L
         private var outputDroppedRemainderBytes = 0L
         private var flushCount = 0L
@@ -884,6 +1117,7 @@ object AndroidUsbAudioBridge {
 
         @Synchronized fun recordWrite(writtenBytes: Int, peak: Int, _chunkAgeMs: Long, audioTrackWriteMs: Double) {
             activeBytesWritten += writtenBytes.toLong()
+            activeSamplesWritten += (writtenBytes / bytesPerSample).toLong()
             if (peak > activePeak) activePeak = peak
             audioTrackWriteLatency.record(audioTrackWriteMs)
         }
@@ -920,7 +1154,7 @@ object AndroidUsbAudioBridge {
             val jitter = jitterBuffer.snapshot()
             LogBus.i(
                 TAG,
-                "$message rate=$sampleRate buffer=$bufferSize elapsed=${"%.1f".format(elapsedSeconds)}s bytesRead=$bytesRead activeBytesWritten=$activeBytesWritten socketReads=$socketReads lastSeq=$lastSequence shortReads=$shortReads outputDroppedRemainderBytes=$outputDroppedRemainderBytes silentBytesSkipped=$silentBytesSkipped flushCount=$flushCount partialWriteCalls=$partialWriteCalls zeroWrites=$zeroWrites writeErrors=$writeErrors activePeak=$activePeak ${socketRead.format("outputSocketRead")} ${queueAge.format("outputChunkAge")} ${audioTrackWrite.format("outputAudioTrackWrite")} ${formatJitter("outputJitter", jitter)}"
+                "$message rate=$sampleRate format=$format bytesPerSample=$bytesPerSample buffer=$bufferSize elapsed=${"%.1f".format(elapsedSeconds)}s bytesRead=$bytesRead activeSamplesWritten=$activeSamplesWritten activeBytesWritten=$activeBytesWritten socketReads=$socketReads lastSeq=$lastSequence shortReads=$shortReads outputDroppedRemainderBytes=$outputDroppedRemainderBytes silentBytesSkipped=$silentBytesSkipped flushCount=$flushCount partialWriteCalls=$partialWriteCalls zeroWrites=$zeroWrites writeErrors=$writeErrors activePeak=$activePeak ${socketRead.format("outputSocketRead")} ${queueAge.format("outputChunkAge")} ${audioTrackWrite.format("outputAudioTrackWrite")} ${formatJitter("outputJitter", jitter)}"
             )
             lastLoggedAt = now
             activePeak = 0
