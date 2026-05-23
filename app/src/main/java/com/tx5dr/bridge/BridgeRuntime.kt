@@ -175,7 +175,12 @@ object BridgeRuntime {
                 RuntimeReleaseManager.ensureBaseRuntime(app, paths, ::logProgress)
                 val version = RuntimeReleaseManager.installTx5drRelease(paths, getManifestUrl(), ::logProgress)
                 prefs.edit().putString("installedVersion", version).apply()
-                updateStatus(detectInitialStatus().copy(error = null, progress = "Install/update complete", installProgress = null))
+                updateStatus(detectInitialStatus().copy(
+                    runtimeDetail = INSTALL_SUCCESS_DETAIL,
+                    error = null,
+                    progress = "Install/update complete",
+                    installProgress = null,
+                ))
             } catch (error: Throwable) {
                 LogBus.e(TAG, "Install/update failed", error)
                 updateStatus(status.copy(runtimeState = RuntimeState.Error, runtimePhase = RuntimePhase.Error, error = error.message, installProgress = null))
@@ -687,6 +692,7 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
 
 
 
+    const val INSTALL_SUCCESS_DETAIL = "installSuccess"
     const val PREF_AUTO_START_RUNTIME = "autoStartRuntime"
     const val PREF_AUTO_START_BRIDGES = "autoStartBridges"
     const val PREF_AUTO_OPEN_WEBVIEW = "autoOpenWebView"

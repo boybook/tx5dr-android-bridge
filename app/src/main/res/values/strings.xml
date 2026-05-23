@@ -47,7 +47,8 @@
     <string name="runtime_waiting_api_subtitle">The page proxy is ready. Waiting for the TX-5DR API.</string>
     <string name="runtime_waiting_web">Waiting for page proxy</string>
     <string name="runtime_waiting_web_subtitle">The TX-5DR API is ready. Waiting for the page proxy.</string>
-    <string name="runtime_installed_subtitle">Runtime is installed. You can start the background service.</string>
+    <string name="runtime_installed_subtitle">Runtime is installed. You can start the service.</string>
+    <string name="runtime_install_success_subtitle">Engine installed successfully. Tap Start service to run TX-5DR.</string>
     <string name="runtime_preparing">Preparing</string>
     <string name="runtime_wait">Please wait.</string>
     <string name="runtime_error_chip">Error</string>
@@ -149,8 +150,10 @@
     <string name="system_abi_supported_64_bit_abis">64-bit ABIs: %1$s</string>
     <string name="system_abi_zygote">Zygote: %1$s</string>
     <string name="system_abi_native_library_dir">Native library dir: %1$s</string>
-    <string name="auto_enter_tx5dr">Automatically enter TX-5DR after startup</string>
-    <string name="auto_enter_tx5dr_subtitle">When off, only the background service runs.</string>
+    <string name="auto_start_service">Automatically run TX-5DR when opening the app</string>
+    <string name="auto_start_service_subtitle">When off, use Start service manually.</string>
+    <string name="auto_enter_tx5dr">Automatically open the page when TX-5DR is ready</string>
+    <string name="auto_enter_tx5dr_subtitle">When off, stay on the status page.</string>
     <string name="audio_buffer_target_title">Audio buffer</string>
     <string name="audio_buffer_target_subtitle">Lower values reduce delay but may underrun on some devices. Audio bridge reconnects after changes.</string>
     <string name="audio_buffer_target_compatible">Compatible</string>

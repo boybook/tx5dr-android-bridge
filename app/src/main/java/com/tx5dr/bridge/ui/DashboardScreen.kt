@@ -119,6 +119,7 @@ fun DashboardScreen(
     lanUrls: List<String>,
     adminToken: String?,
     manifestUrl: String,
+    autoStartRuntime: Boolean,
     autoOpenWebView: Boolean,
     audioBufferTargetMs: Int,
     keepAliveEnabled: Boolean,
@@ -150,6 +151,7 @@ fun DashboardScreen(
     onCopyText: (String) -> Unit,
     onRefreshLan: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
+    onAutoStartRuntimeChange: (Boolean) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
     onAudioBufferTargetChange: (Int) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
@@ -255,11 +257,13 @@ fun DashboardScreen(
                 SettingsSheet(
                     bridgeStatus = bridgeStatus,
                     manifestUrl = manifestUrl,
+                    autoStartRuntime = autoStartRuntime,
                     autoOpenWebView = autoOpenWebView,
                     notificationPermissionState = notificationPermissionState,
                     externalDataStatus = externalDataStatus,
                     onDismiss = onDismissSettings,
                     onManifestUrlChange = onManifestUrlChange,
+                    onAutoStartRuntimeChange = onAutoStartRuntimeChange,
                     onAutoOpenWebViewChange = onAutoOpenWebViewChange,
                     onServiceOnlyModeChange = onServiceOnlyModeChange,
                     onOpenBatterySettings = onOpenBatterySettings,
@@ -574,6 +578,21 @@ private fun HeroStatusDetail(
                     LinearProgressIndicator(Modifier.fillMaxWidth(0.72f))
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = !visual.busy && status.runtimeState != RuntimeState.NotInstalled &&
+                status.runtimeState != RuntimeState.Error && status.error == null,
+            enter = fadeIn() + expandVertically(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            Text(
+                visual.subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
 
         AnimatedVisibility(
@@ -995,11 +1014,13 @@ private fun SystemAbiDiagnostic(status: BridgeStatus) {
 private fun SettingsSheet(
     bridgeStatus: BridgeStatus,
     manifestUrl: String,
+    autoStartRuntime: Boolean,
     autoOpenWebView: Boolean,
     notificationPermissionState: String,
     externalDataStatus: ExternalDataStatus,
     onDismiss: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
+    onAutoStartRuntimeChange: (Boolean) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
     onOpenBatterySettings: () -> Unit,
@@ -1019,6 +1040,12 @@ private fun SettingsSheet(
         ) {
             Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             SettingsGroup {
+                SettingsSwitch(
+                    title = stringResource(R.string.auto_start_service),
+                    subtitle = stringResource(R.string.auto_start_service_subtitle),
+                    checked = autoStartRuntime,
+                    onCheckedChange = onAutoStartRuntimeChange,
+                )
                 SettingsSwitch(
                     title = stringResource(R.string.auto_enter_tx5dr),
                     subtitle = stringResource(R.string.auto_enter_tx5dr_subtitle),

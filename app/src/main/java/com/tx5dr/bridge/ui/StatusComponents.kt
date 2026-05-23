@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.tx5dr.bridge.BridgeRuntime
 import com.tx5dr.bridge.BridgeStatus
 import com.tx5dr.bridge.InstallProgress
 import com.tx5dr.bridge.InstallProgressStage
@@ -108,7 +109,11 @@ internal fun statusVisual(status: BridgeStatus): StatusVisual {
         )
         status.runtimeState == RuntimeState.Installed || status.runtimeState == RuntimeState.Stopped -> StatusVisual(
             title = stringResource(R.string.runtime_not_started),
-            subtitle = stringResource(R.string.runtime_installed_subtitle),
+            subtitle = if (status.runtimeDetail == BridgeRuntime.INSTALL_SUCCESS_DETAIL) {
+                stringResource(R.string.runtime_install_success_subtitle)
+            } else {
+                stringResource(R.string.runtime_installed_subtitle)
+            },
             chip = stringResource(R.string.runtime_installed_chip),
             icon = Icons.Filled.Warning,
             color = scheme.tertiary,

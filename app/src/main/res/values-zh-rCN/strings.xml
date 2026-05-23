@@ -47,7 +47,8 @@
     <string name="runtime_waiting_api_subtitle">页面代理已启动，正在等待 TX-5DR API。</string>
     <string name="runtime_waiting_web">等待页面代理</string>
     <string name="runtime_waiting_web_subtitle">TX-5DR API 已启动，正在等待页面代理。</string>
-    <string name="runtime_installed_subtitle">运行环境已安装，可以启动后台服务。</string>
+    <string name="runtime_installed_subtitle">运行环境已安装，可以启动服务。</string>
+    <string name="runtime_install_success_subtitle">引擎安装成功，请点击“启动服务”来启动 TX-5DR。</string>
     <string name="runtime_preparing">正在准备</string>
     <string name="runtime_wait">请稍候。</string>
     <string name="runtime_error_chip">异常</string>
@@ -149,8 +150,10 @@
     <string name="system_abi_supported_64_bit_abis">64-bit ABI：%1$s</string>
     <string name="system_abi_zygote">Zygote：%1$s</string>
     <string name="system_abi_native_library_dir">Native library 目录：%1$s</string>
-    <string name="auto_enter_tx5dr">启动后自动进入 TX-5DR</string>
-    <string name="auto_enter_tx5dr_subtitle">关闭后仅运行后台服务。</string>
+    <string name="auto_start_service">打开应用后自动运行 TX-5DR</string>
+    <string name="auto_start_service_subtitle">关闭后需手动点击启动服务。</string>
+    <string name="auto_enter_tx5dr">TX-5DR 就绪后自动进入页面</string>
+    <string name="auto_enter_tx5dr_subtitle">关闭后停留在状态页。</string>
     <string name="audio_buffer_target_title">音频缓冲</string>
     <string name="audio_buffer_target_subtitle">数值越低延迟越小，但部分设备可能出现 underrun；修改后会重连音频桥。</string>
     <string name="audio_buffer_target_compatible">兼容</string>

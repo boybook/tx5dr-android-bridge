@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
     private var lanUrls by mutableStateOf<List<String>>(emptyList())
     private var adminToken by mutableStateOf<String?>(null)
     private var manifestUrl by mutableStateOf("")
+    private var autoStartRuntime by mutableStateOf(true)
     private var autoOpenWebView by mutableStateOf(true)
     private var serviceOnlyMode by mutableStateOf(false)
     private var keepAliveEnabled by mutableStateOf(false)
@@ -146,6 +147,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         loadPreferences()
+        val restoreWebViewAfterRecreate = savedInstanceState?.getBoolean(STATE_WEB_VISIBLE, false) == true
+        savedInstanceState?.let { state ->
+            webSuppressedForSession = state.getBoolean(STATE_WEB_SUPPRESSED_FOR_SESSION, false)
+        }
         manifestUrl = BridgeRuntime.getManifestUrl()
         refreshLanUrls()
         refreshAdminToken()
@@ -164,6 +169,7 @@ class MainActivity : ComponentActivity() {
                     lanUrls = lanUrls,
                     adminToken = adminToken,
                     manifestUrl = manifestUrl,
+                    autoStartRuntime = autoStartRuntime,
                     autoOpenWebView = autoOpenWebView,
                     audioBufferTargetMs = audioBufferTargetMs,
                     keepAliveEnabled = keepAliveEnabled,
@@ -199,6 +205,7 @@ class MainActivity : ComponentActivity() {
                         releasePreview = null
                         releasePreviewError = null
                     },
+                    onAutoStartRuntimeChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_START_RUNTIME, it) },
                     onAutoOpenWebViewChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, it) },
                     onAudioBufferTargetChange = { updateAudioBufferTargetMs(it) },
                     onServiceOnlyModeChange = { value ->
@@ -219,6 +226,10 @@ class MainActivity : ComponentActivity() {
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         BridgeService.start(this, BridgeService.ACTION_BOOTSTRAP)
         handleLaunchIntent(intent)
+        if (restoreWebViewAfterRecreate && !webVisible) {
+            webSuppressedForSession = false
+            openWebView()
+        }
         LogBus.i("Tx5drBridge", "MainActivity created")
     }
 
@@ -235,6 +246,12 @@ class MainActivity : ComponentActivity() {
             BridgeRuntime.startBridges()
         }
         checkRemoteVersion()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_WEB_VISIBLE, webVisible)
+        outState.putBoolean(STATE_WEB_SUPPRESSED_FOR_SESSION, webSuppressedForSession)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -269,6 +286,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadPreferences() {
+        autoStartRuntime = BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_RUNTIME, true)
         autoOpenWebView = BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, true)
         serviceOnlyMode = BridgeRuntime.getPreference(BridgeRuntime.PREF_SERVICE_ONLY_MODE, false)
         keepAliveEnabled = BridgeRuntime.getPreference(BridgeRuntime.PREF_KEEP_ALIVE_ENABLED, false)
@@ -1254,5 +1272,7 @@ class MainActivity : ComponentActivity() {
         private const val RELEASE_PREVIEW_MIN_INTERVAL_MS = 10 * 60 * 1000L
         private const val WEBVIEW_LOAD_TIMEOUT_MS = 9000L
         private const val MAX_WEBVIEW_AUTO_RETRIES = 1
+        private const val STATE_WEB_VISIBLE = "tx5dr.webVisible"
+        private const val STATE_WEB_SUPPRESSED_FOR_SESSION = "tx5dr.webSuppressedForSession"
     }
 }

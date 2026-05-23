@@ -47,7 +47,8 @@
     <string name="runtime_waiting_api_subtitle">ページプロキシは起動済みです。TX-5DR API を待っています。</string>
     <string name="runtime_waiting_web">ページプロキシを待機中</string>
     <string name="runtime_waiting_web_subtitle">TX-5DR API は起動済みです。ページプロキシを待っています。</string>
-    <string name="runtime_installed_subtitle">ランタイムはインストール済みです。バックグラウンドサービスを開始できます。</string>
+    <string name="runtime_installed_subtitle">ランタイムはインストール済みです。サービスを開始できます。</string>
+    <string name="runtime_install_success_subtitle">エンジンのインストールが完了しました。「サービス開始」を押して TX-5DR を起動してください。</string>
     <string name="runtime_preparing">準備中</string>
     <string name="runtime_wait">しばらくお待ちください。</string>
     <string name="runtime_error_chip">異常</string>
@@ -149,8 +150,10 @@
     <string name="system_abi_supported_64_bit_abis">64-bit ABI: %1$s</string>
     <string name="system_abi_zygote">Zygote: %1$s</string>
     <string name="system_abi_native_library_dir">Native library dir: %1$s</string>
-    <string name="auto_enter_tx5dr">起動後に自動で TX-5DR に入る</string>
-    <string name="auto_enter_tx5dr_subtitle">オフの場合はバックグラウンドサービスのみ実行します。</string>
+    <string name="auto_start_service">アプリを開いたら TX-5DR を自動実行</string>
+    <string name="auto_start_service_subtitle">オフの場合は手動でサービスを開始します。</string>
+    <string name="auto_enter_tx5dr">TX-5DR の準備完了後に自動でページを開く</string>
+    <string name="auto_enter_tx5dr_subtitle">オフの場合はステータス画面に留まります。</string>
     <string name="audio_buffer_target_title">オーディオバッファ</string>
     <string name="audio_buffer_target_subtitle">値を下げると遅延は減りますが、一部の端末では underrun が起きる場合があります。変更後にオーディオブリッジを再接続します。</string>
     <string name="audio_buffer_target_compatible">互換</string>
