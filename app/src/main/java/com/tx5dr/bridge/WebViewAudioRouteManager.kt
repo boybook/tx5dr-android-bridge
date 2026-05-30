@@ -4,24 +4,34 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 
 class WebViewAudioRouteManager {
     private val activeReasons = linkedSetOf<String>()
+    private val handler = Handler(Looper.getMainLooper())
     private var originalMode: Int? = null
     private var originalSpeakerphoneOn: Boolean? = null
     private var routeAcquired = false
+    private var appContext: Context? = null
 
     @Synchronized
     fun enter(context: Context, rawReason: String?): String {
+        appContext = context.applicationContext
         val reason = normalizeReason(rawReason)
         if (activeReasons.isNotEmpty()) {
             activeReasons.add(reason)
-            return statusJson(RouteResult(true, "already-active")).toString()
+            val result = ensureSpeakerRoute(context.applicationContext, "already-active:$reason")
+            scheduleRouteChecks("already-active:$reason")
+            return statusJson(result).toString()
         }
         val result = activate(context.applicationContext, reason)
-        if (result.ok) activeReasons.add(reason)
+        if (result.ok) {
+            activeReasons.add(reason)
+            scheduleRouteChecks(reason)
+        }
         return statusJson(result).toString()
     }
 
@@ -37,6 +47,7 @@ class WebViewAudioRouteManager {
     fun leaveAll(context: Context, rawReason: String? = "webview-destroyed"): String {
         val reason = normalizeReason(rawReason)
         activeReasons.clear()
+        handler.removeCallbacksAndMessages(null)
         val result = deactivate(context.applicationContext, reason)
         return statusJson(result).toString()
     }
@@ -87,8 +98,60 @@ class WebViewAudioRouteManager {
         }
     }
 
+    private fun ensureSpeakerRoute(context: Context, reason: String): RouteResult {
+        if (!routeAcquired) return RouteResult(true, "inactive")
+        val manager = context.getSystemService(AudioManager::class.java)
+            ?: return RouteResult(false, "audio-manager-unavailable")
+
+        return if (Build.VERSION.SDK_INT >= 31) {
+            val speaker = findBuiltinSpeaker(manager)
+                ?: return RouteResult(false, "builtin-speaker-unavailable")
+            if (manager.mode != AudioManager.MODE_IN_COMMUNICATION) {
+                @Suppress("DEPRECATION")
+                manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            }
+            if (manager.communicationDevice?.id == speaker.id) {
+                RouteResult(true, "speaker-route-current", speaker)
+            } else {
+                val accepted = runCatching { manager.setCommunicationDevice(speaker) }
+                    .onFailure { LogBus.w(TAG, "Failed to re-assert WebView speaker route: ${it.message}") }
+                    .getOrDefault(false)
+                if (accepted) {
+                    LogBus.i(TAG, "WebView audio speaker route re-asserted reason=$reason device=${speaker.describe()}")
+                    RouteResult(true, "speaker-route-reasserted", speaker)
+                } else {
+                    LogBus.w(TAG, "Android rejected WebView speaker route re-assertion reason=$reason device=${speaker.describe()}")
+                    RouteResult(false, "speaker-route-rejected", speaker)
+                }
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            @Suppress("DEPRECATION")
+            manager.isSpeakerphoneOn = true
+            RouteResult(true, "legacy-speakerphone-reasserted")
+        }
+    }
+
+    private fun scheduleRouteChecks(reason: String) {
+        if (!routeAcquired) return
+        listOf(250L, 1000L).forEach { delayMs ->
+            handler.postDelayed({
+                val context = synchronized(this) {
+                    if (!routeAcquired || activeReasons.isEmpty()) null else appContext
+                } ?: return@postDelayed
+                synchronized(this) {
+                    if (routeAcquired && activeReasons.isNotEmpty()) {
+                        ensureSpeakerRoute(context, "$reason+${delayMs}ms")
+                    }
+                }
+            }, delayMs)
+        }
+    }
+
     private fun deactivate(context: Context, reason: String): RouteResult {
         if (!routeAcquired) return RouteResult(true, "inactive")
+        handler.removeCallbacksAndMessages(null)
         val manager = context.getSystemService(AudioManager::class.java)
             ?: return RouteResult(false, "audio-manager-unavailable")
         restore(manager, originalMode, originalSpeakerphoneOn, clearCommunicationDevice = Build.VERSION.SDK_INT >= 31)
