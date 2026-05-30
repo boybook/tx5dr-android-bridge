@@ -23,6 +23,7 @@ import android.view.View
 import android.webkit.CookieManager
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -77,6 +78,8 @@ class MainActivity : ComponentActivity() {
     private var nativeWebView: WebView? = null
     private var webOverlayContainer: FrameLayout? = null
     private var webNotificationBridge: AndroidWebNotificationBridge? = null
+    private val webViewAudioRouteManager = WebViewAudioRouteManager()
+    private var pendingWebAudioPermissionRequest: PermissionRequest? = null
     private var pendingFilePathCallback: ValueCallback<Array<Uri>>? = null
     private var webLoadGeneration = 0
     private var webPageCommitted = false
@@ -379,6 +382,7 @@ class MainActivity : ComponentActivity() {
             configureWebViewTheme(settings)
             addJavascriptInterface(WebChromeBridge(), WEB_CHROME_BRIDGE)
             addJavascriptInterface(WebDownloadBridge(), WEB_DOWNLOAD_BRIDGE)
+            addJavascriptInterface(WebAudioBridge(), WEB_AUDIO_BRIDGE)
             val notificationBridge = AndroidWebNotificationBridge(this@MainActivity, this, url)
             webNotificationBridge = notificationBridge
             addJavascriptInterface(notificationBridge, WEB_NOTIFICATION_BRIDGE)
@@ -416,6 +420,7 @@ class MainActivity : ComponentActivity() {
                     }
                     installWebChromeProbe(view)
                     installWebDownloadBridge(view)
+                    installWebAudioBridge(view)
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
@@ -423,6 +428,7 @@ class MainActivity : ComponentActivity() {
                     LogBus.i("WebView", "Page finished: ${url.substringBefore('?')}")
                     installWebChromeProbe(view)
                     installWebDownloadBridge(view)
+                    installWebAudioBridge(view)
                 }
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -617,6 +623,19 @@ class MainActivity : ComponentActivity() {
                 true
             }
         }
+
+        override fun onPermissionRequest(request: PermissionRequest) {
+            runOnUiThread { handleWebPermissionRequest(request) }
+        }
+
+        override fun onPermissionRequestCanceled(request: PermissionRequest) {
+            runOnUiThread {
+                if (pendingWebAudioPermissionRequest === request) {
+                    LogBus.i("WebView", "WebView audio capture permission request cancelled")
+                    pendingWebAudioPermissionRequest = null
+                }
+            }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -751,6 +770,50 @@ class MainActivity : ComponentActivity() {
                   }
                 })();
               }, true);
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
+    private fun installWebAudioBridge(webView: WebView) {
+        val js = """
+            (function() {
+              if (window.__tx5drAndroidAudioBridgeInstalled) {
+                return;
+              }
+              window.__tx5drAndroidAudioBridgeInstalled = true;
+              const nativeBridge = window.$WEB_AUDIO_BRIDGE;
+              function parseNative(value) {
+                try {
+                  return typeof value === 'string' ? JSON.parse(value) : value;
+                } catch (error) {
+                  return { ok: false, reason: 'invalid-native-response', raw: String(value || '') };
+                }
+              }
+              window.Tx5drAndroidAudio = {
+                enterVoiceAudio: function(reason) {
+                  if (!nativeBridge) return { ok: false, reason: 'native-bridge-missing' };
+                  return parseNative(nativeBridge.enterVoiceAudio(String(reason || 'webview-audio')));
+                },
+                leaveVoiceAudio: function(reason) {
+                  if (!nativeBridge) return { ok: false, reason: 'native-bridge-missing' };
+                  return parseNative(nativeBridge.leaveVoiceAudio(String(reason || 'webview-audio')));
+                },
+                probeAudioEnvironment: function() {
+                  const nativeStatus = nativeBridge
+                    ? parseNative(nativeBridge.probeAudioEnvironment())
+                    : { ok: false, reason: 'native-bridge-missing' };
+                  return Object.assign({}, nativeStatus, {
+                    isSecureContext: Boolean(window.isSecureContext),
+                    hasMediaDevices: Boolean(navigator.mediaDevices),
+                    hasGetUserMedia: Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+                    origin: window.location.origin
+                  });
+                }
+              };
+              try {
+                console.info('[TX-5DR Android] audio environment', window.Tx5drAndroidAudio.probeAudioEnvironment());
+              } catch (error) {}
             })();
         """.trimIndent()
         webView.evaluateJavascript(js, null)
@@ -909,6 +972,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private inner class WebAudioBridge {
+        @JavascriptInterface
+        fun enterVoiceAudio(reason: String?): String =
+            webViewAudioRouteManager.enter(this@MainActivity, reason)
+
+        @JavascriptInterface
+        fun leaveVoiceAudio(reason: String?): String =
+            webViewAudioRouteManager.leave(this@MainActivity, reason)
+
+        @JavascriptInterface
+        fun probeAudioEnvironment(): String =
+            webViewAudioRouteManager.probe(this@MainActivity)
+    }
+
     private data class PendingWebDownload(
         val id: String,
         val fileName: String,
@@ -1063,6 +1140,9 @@ class MainActivity : ComponentActivity() {
     private fun destroyNativeWebView() {
         webLoadGeneration += 1
         webPageCommitted = false
+        pendingWebAudioPermissionRequest?.deny()
+        pendingWebAudioPermissionRequest = null
+        webViewAudioRouteManager.leaveAll(this)
         pendingFilePathCallback?.onReceiveValue(null)
         pendingFilePathCallback = null
         synchronized(webDownloadLock) {
@@ -1186,6 +1266,58 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun handleWebPermissionRequest(request: PermissionRequest) {
+        val origin = request.origin
+        val resources = request.resources.orEmpty()
+        if (!isAllowedWebUrl(origin)) {
+            LogBus.w("WebView", "Denied WebView permission from non-local origin: $origin")
+            request.deny()
+            return
+        }
+        if (!webVisible || nativeWebView == null) {
+            LogBus.w("WebView", "Denied WebView permission while WebView is not active")
+            request.deny()
+            return
+        }
+        val onlyAudioCapture = resources.isNotEmpty() &&
+            resources.all { it == PermissionRequest.RESOURCE_AUDIO_CAPTURE }
+        if (!onlyAudioCapture) {
+            LogBus.w("WebView", "Denied unsupported WebView permission resources: ${resources.joinToString(",")}")
+            request.deny()
+            return
+        }
+
+        if (AndroidUsbAudioBridge.hasRecordPermission(this)) {
+            grantWebAudioCapture(request)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 23 &&
+            usbAudioStatus.state == "permission-denied" &&
+            !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+        ) {
+            LogBus.w("WebView", "Microphone permission denied permanently for WebView audio capture; opening app settings")
+            request.deny()
+            openAppSettings()
+            return
+        }
+
+        pendingWebAudioPermissionRequest?.takeIf { it !== request }?.deny()
+        pendingWebAudioPermissionRequest = request
+        LogBus.i("WebView", "Requesting Android RECORD_AUDIO for WebView audio capture")
+        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_RECORD_AUDIO)
+    }
+
+    private fun grantWebAudioCapture(request: PermissionRequest) {
+        runCatching {
+            request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+        }.onSuccess {
+            LogBus.i("WebView", "WebView audioCapture permission granted for ${request.origin}")
+        }.onFailure { error ->
+            LogBus.w("WebView", "Failed to grant WebView audioCapture permission: ${error.message}")
+            request.deny()
+        }
+    }
+
     private fun startSerialWithPermission() {
         AndroidUsbSerialBridge.start(this, BridgeRuntime.paths.androidSerialDevicesFile)
         BridgeRuntime.startLinuxSerialSide()
@@ -1232,10 +1364,26 @@ class MainActivity : ComponentActivity() {
         }
         if (requestCode == REQ_RECORD_AUDIO && micWanted) {
             micWanted = false
+            val pendingWebRequest = pendingWebAudioPermissionRequest
+            pendingWebAudioPermissionRequest = null
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                pendingWebRequest?.let { grantWebAudioCapture(it) }
                 AndroidUsbAudioBridge.start(this)
             } else {
                 LogBus.w("AudioBridge", "Microphone permission denied")
+                pendingWebRequest?.deny()
+                AndroidUsbAudioBridge.markPermissionDenied()
+            }
+            return
+        }
+        if (requestCode == REQ_RECORD_AUDIO && pendingWebAudioPermissionRequest != null) {
+            val pendingWebRequest = pendingWebAudioPermissionRequest
+            pendingWebAudioPermissionRequest = null
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                pendingWebRequest?.let { grantWebAudioCapture(it) }
+            } else {
+                LogBus.w("WebView", "Microphone permission denied for WebView audio capture")
+                pendingWebRequest?.deny()
                 AndroidUsbAudioBridge.markPermissionDenied()
             }
         }
@@ -1266,6 +1414,7 @@ class MainActivity : ComponentActivity() {
         private const val WEB_URL = "http://127.0.0.1:8076"
         private const val WEB_CHROME_BRIDGE = "Tx5drAndroidChrome"
         private const val WEB_DOWNLOAD_BRIDGE = "Tx5drAndroidDownloads"
+        private const val WEB_AUDIO_BRIDGE = "Tx5drAndroidAudioNative"
         private const val WEB_NOTIFICATION_BRIDGE = "Tx5drAndroidNotifications"
         const val ACTION_OPEN_WEBVIEW = "com.tx5dr.bridge.OPEN_WEBVIEW"
         private const val MAX_WEB_DOWNLOAD_BYTES = 128L * 1024L * 1024L
