@@ -1323,7 +1323,14 @@ private fun AudioDetailSheet(
     onShowDiagnostics: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        val sheetScrollState = rememberScrollState()
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(sheetScrollState)
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     stringResource(R.string.audio_route),
