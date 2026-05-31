@@ -142,14 +142,9 @@
     <string name="diagnostics_settings">诊断与设置</string>
     <string name="settings">设置</string>
     <string name="recent_error">最近错误</string>
-    <string name="system_abi_title">系统 ABI</string>
-    <string name="system_abi_supported">此设备可以运行 TX-5DR Android 运行环境。</string>
-    <string name="system_abi_unsupported">当前设备仅暴露 32-bit Android 用户态，请使用 64-bit Android 手机、平板或 Android TV。</string>
-    <string name="system_abi_required">需要：%1$s</string>
-    <string name="system_abi_supported_abis">支持的 ABI：%1$s</string>
-    <string name="system_abi_supported_64_bit_abis">64-bit ABI：%1$s</string>
-    <string name="system_abi_zygote">Zygote：%1$s</string>
-    <string name="system_abi_native_library_dir">Native library 目录：%1$s</string>
+    <string name="runtime_log_tab_server">Server</string>
+    <string name="runtime_log_tab_web">Web</string>
+    <string name="runtime_log_tab_bridge">Bridge</string>
     <string name="auto_start_service">打开应用后自动运行 TX-5DR</string>
     <string name="auto_start_service_subtitle">关闭后需手动点击启动服务。</string>
     <string name="auto_enter_tx5dr">TX-5DR 就绪后自动进入页面</string>

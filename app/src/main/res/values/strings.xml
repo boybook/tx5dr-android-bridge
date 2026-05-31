@@ -142,14 +142,9 @@
     <string name="diagnostics_settings">Diagnostics and settings</string>
     <string name="settings">Settings</string>
     <string name="recent_error">Recent error</string>
-    <string name="system_abi_title">System ABI</string>
-    <string name="system_abi_supported">This device can run the TX-5DR Android runtime.</string>
-    <string name="system_abi_unsupported">This device only exposes a 32-bit Android userspace. Please use a 64-bit Android phone, tablet, or Android TV.</string>
-    <string name="system_abi_required">Required: %1$s</string>
-    <string name="system_abi_supported_abis">Supported ABIs: %1$s</string>
-    <string name="system_abi_supported_64_bit_abis">64-bit ABIs: %1$s</string>
-    <string name="system_abi_zygote">Zygote: %1$s</string>
-    <string name="system_abi_native_library_dir">Native library dir: %1$s</string>
+    <string name="runtime_log_tab_server">Server</string>
+    <string name="runtime_log_tab_web">Web</string>
+    <string name="runtime_log_tab_bridge">Bridge</string>
     <string name="auto_start_service">Automatically run TX-5DR when opening the app</string>
     <string name="auto_start_service_subtitle">When off, use Start service manually.</string>
     <string name="auto_enter_tx5dr">Automatically open the page when TX-5DR is ready</string>

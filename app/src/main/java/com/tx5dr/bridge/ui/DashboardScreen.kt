@@ -73,6 +73,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -108,6 +111,12 @@ import com.tx5dr.bridge.RuntimeState
 import com.tx5dr.bridge.UsbAudioDevice
 import com.tx5dr.bridge.UsbAudioStatus
 import com.tx5dr.bridge.UsbSerialStatus
+
+private enum class RuntimeLogTab {
+    Server,
+    Web,
+    Bridge,
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -248,7 +257,6 @@ fun DashboardScreen(
                 LogsSheet(
                     bridgeStatus = bridgeStatus,
                     logs = logs,
-                    externalDataStatus = externalDataStatus,
                     onDismiss = onDismissLogs,
                 )
             }
@@ -902,12 +910,15 @@ private fun InstallRuntimeDialog(
 private fun LogsSheet(
     bridgeStatus: BridgeStatus,
     logs: String,
-    externalDataStatus: ExternalDataStatus,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         val logScrollState = rememberScrollState()
-        LaunchedEffect(Unit) {
+        var selectedLogTab by remember { mutableStateOf(RuntimeLogTab.Server) }
+        val filteredLines = remember(logs, selectedLogTab) {
+            filterRuntimeLogLines(logs, selectedLogTab)
+        }
+        LaunchedEffect(selectedLogTab, filteredLines.size) {
             logScrollState.scrollTo(logScrollState.maxValue)
         }
         Column(
@@ -917,8 +928,17 @@ private fun LogsSheet(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(stringResource(R.string.runtime_logs), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            SystemAbiDiagnostic(bridgeStatus)
-            DataDirectoryDiagnostic(externalDataStatus)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                RuntimeLogTab.values().forEachIndexed { index, tab ->
+                    SegmentedButton(
+                        selected = selectedLogTab == tab,
+                        onClick = { selectedLogTab = tab },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = RuntimeLogTab.values().size),
+                    ) {
+                        Text(runtimeLogTabLabel(tab))
+                    }
+                }
+            }
             bridgeStatus.error?.let {
                 Card(Modifier.fillMaxWidth()) {
                     ListItem(
@@ -942,7 +962,7 @@ private fun LogsSheet(
                         .verticalScroll(logScrollState),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    val lines = logs.lines().ifEmpty { listOf(stringResource(R.string.no_logs)) }
+                    val lines = filteredLines.ifEmpty { listOf(stringResource(R.string.no_logs)) }
                     lines.forEach { line ->
                         LogLine(line)
                     }
@@ -952,6 +972,30 @@ private fun LogsSheet(
         }
     }
 }
+
+@Composable
+private fun runtimeLogTabLabel(tab: RuntimeLogTab): String = when (tab) {
+    RuntimeLogTab.Server -> stringResource(R.string.runtime_log_tab_server)
+    RuntimeLogTab.Web -> stringResource(R.string.runtime_log_tab_web)
+    RuntimeLogTab.Bridge -> stringResource(R.string.runtime_log_tab_bridge)
+}
+
+private fun filterRuntimeLogLines(logs: String, tab: RuntimeLogTab): List<String> {
+    val lines = logs.lines().filter { it.isNotBlank() }
+    return lines.filter { line ->
+        when (tab) {
+            RuntimeLogTab.Server -> isServerLogLine(line)
+            RuntimeLogTab.Web -> isWebLogLine(line)
+            RuntimeLogTab.Bridge -> !isServerLogLine(line) && !isWebLogLine(line)
+        }
+    }
+}
+
+private fun isServerLogLine(line: String): Boolean =
+    "[server]" in line || "[proot]" in line
+
+private fun isWebLogLine(line: String): Boolean =
+    "[WebView]" in line || "[WebNotification]" in line
 
 @Composable
 private fun LogLine(line: String) {
@@ -973,39 +1017,6 @@ private fun logLineColor(line: String): Color {
         "[WARN]" in upper || " WARN " in upper || "WARNING" in upper ->
             MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-}
-
-@Composable
-private fun SystemAbiDiagnostic(status: BridgeStatus) {
-    val abi = status.runtimeAbiStatus
-    Card(Modifier.fillMaxWidth()) {
-        ListItem(
-            leadingContent = {
-                Icon(
-                    if (abi.supported) Icons.Filled.CheckCircle else Icons.Filled.Error,
-                    contentDescription = null,
-                    tint = if (abi.supported) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                )
-            },
-            headlineContent = { Text(stringResource(R.string.system_abi_title)) },
-            supportingContent = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        if (abi.supported) {
-                            stringResource(R.string.system_abi_supported)
-                        } else {
-                            stringResource(R.string.system_abi_unsupported)
-                        },
-                    )
-                    Text(stringResource(R.string.system_abi_required, abi.requiredAbi))
-                    Text(stringResource(R.string.system_abi_supported_abis, abi.supportedAbis.ifBlank { stringResource(R.string.not_available) }))
-                    Text(stringResource(R.string.system_abi_supported_64_bit_abis, abi.supported64BitAbis.ifBlank { stringResource(R.string.not_available) }))
-                    Text(stringResource(R.string.system_abi_zygote, abi.zygote.ifBlank { stringResource(R.string.not_available) }))
-                    Text(stringResource(R.string.system_abi_native_library_dir, abi.nativeLibraryDir.ifBlank { stringResource(R.string.not_available) }))
-                }
-            },
-        )
     }
 }
 
@@ -1243,26 +1254,6 @@ private fun DataDirectoryPathRow(label: String, path: String?) {
             overflow = TextOverflow.Clip,
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
-        )
-    }
-}
-
-@Composable
-private fun DataDirectoryDiagnostic(status: ExternalDataStatus) {
-    Card(Modifier.fillMaxWidth()) {
-        ListItem(
-            leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null) },
-            headlineContent = { Text(stringResource(R.string.data_directory_title)) },
-            supportingContent = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(status.rootPath ?: stringResource(R.string.not_available), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val storageLabel = if (status.external) stringResource(R.string.data_directory_external_label) else stringResource(R.string.data_directory_internal_label)
-                    Text(storageLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    status.migrationSummary?.takeIf { it.isNotBlank() }?.let {
-                        Text(it, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
         )
     }
 }
