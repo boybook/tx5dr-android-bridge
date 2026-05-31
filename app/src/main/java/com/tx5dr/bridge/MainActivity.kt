@@ -791,6 +791,7 @@ class MainActivity : ComponentActivity() {
                 }
               }
               window.Tx5drAndroidAudio = {
+                nativeOperatorAudio: true,
                 enterVoiceAudio: function(reason) {
                   if (!nativeBridge) return { ok: false, reason: 'native-bridge-missing' };
                   return parseNative(nativeBridge.enterVoiceAudio(String(reason || 'webview-audio')));
