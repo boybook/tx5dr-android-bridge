@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -74,6 +75,7 @@ class MainActivity : ComponentActivity() {
     private var webVisible by mutableStateOf(false)
     private var webSuppressedForSession by mutableStateOf(false)
     private var micWanted = false
+    private var activeVolumeControlStream: Int? = null
     private lateinit var rootContainer: FrameLayout
     private var nativeWebView: WebView? = null
     private var webOverlayContainer: FrameLayout? = null
@@ -138,7 +140,12 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val logListener: (String) -> Unit = { text -> runOnUiThread { logs = text } }
-    private val usbAudioListener: (UsbAudioStatus) -> Unit = { status -> runOnUiThread { usbAudioStatus = status } }
+    private val usbAudioListener: (UsbAudioStatus) -> Unit = { status ->
+        runOnUiThread {
+            usbAudioStatus = status
+            updateVolumeControlStream(status)
+        }
+    }
     private val usbSerialListener: (UsbSerialStatus) -> Unit = { status -> runOnUiThread { usbSerialStatus = status } }
     private val networkListener: (NetworkAccessProvider.Snapshot) -> Unit = { snapshot ->
         runOnUiThread {
@@ -225,7 +232,8 @@ class MainActivity : ComponentActivity() {
         NetworkAccessProvider.addListener(networkListener)
         AndroidUsbAudioBridge.addListener(usbAudioListener)
         AndroidUsbSerialBridge.addListener(usbSerialListener)
-        AndroidUsbAudioBridge.refreshDevices(this)
+        usbAudioStatus = AndroidUsbAudioBridge.refreshDevices(this)
+        updateVolumeControlStream(usbAudioStatus)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         BridgeService.start(this, BridgeService.ACTION_BOOTSTRAP)
         handleLaunchIntent(intent)
@@ -243,7 +251,8 @@ class MainActivity : ComponentActivity() {
         refreshLanUrls()
         refreshAdminToken()
         refreshExternalDataStatus()
-        AndroidUsbAudioBridge.refreshDevices(this)
+        usbAudioStatus = AndroidUsbAudioBridge.refreshDevices(this)
+        updateVolumeControlStream(usbAudioStatus)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
             BridgeRuntime.startBridges()
@@ -304,6 +313,20 @@ class MainActivity : ComponentActivity() {
     private fun updateAudioBufferTargetMs(value: Int) {
         audioBufferTargetMs = BridgeRuntime.setAudioBufferTargetMs(value)
         loadPreferences()
+    }
+
+    private fun updateVolumeControlStream(status: UsbAudioStatus = usbAudioStatus) {
+        val speakerOutputActive = status.outputDevices.any {
+            it.kind == AudioRoute.BUILTIN_SPEAKER && it.connected
+        }
+        val targetStream = if (speakerOutputActive) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
+        if (activeVolumeControlStream == targetStream) return
+        setVolumeControlStream(targetStream)
+        activeVolumeControlStream = targetStream
+        LogBus.i(
+            "AudioBridge",
+            "Activity volume keys bound to ${volumeStreamName(targetStream)} speakerOutputActive=$speakerOutputActive",
+        )
     }
 
     private fun refreshLanUrls() {
@@ -1409,6 +1432,12 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private fun volumeStreamName(stream: Int): String = when (stream) {
+            AudioManager.STREAM_VOICE_CALL -> "STREAM_VOICE_CALL"
+            AudioManager.STREAM_MUSIC -> "STREAM_MUSIC"
+            else -> "stream-$stream"
+        }
+
         private const val REQ_RECORD_AUDIO = 1001
         const val REQ_POST_NOTIFICATIONS = 1002
         private const val WEB_PORT = 8076

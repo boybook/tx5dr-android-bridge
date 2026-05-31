@@ -414,10 +414,7 @@ object AndroidUsbAudioBridge {
         setAudioThreadPriority("output-${device.id}")
         try {
             val targetMs = bufferTargetMs()
-            val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build()
+            val attrs = outputAudioAttributes(bridgeDevice)
             AndroidUnixSocketServer(androidSocketFile(bridgeDevice.socketPath)).use { server ->
                 session.server = server
                 LogBus.i(TAG, "Audio output available on ${bridgeDevice.socketPath} device=${device.describe()} legacyRate=${choosePlaybackRate(device)} target=${targetMs}ms")
@@ -472,7 +469,7 @@ object AndroidUsbAudioBridge {
                                 trackBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                             }
                             val track = trackBuilder.build()
-                            if (Build.VERSION.SDK_INT >= 23) track.preferredDevice = device
+                            val preferredDeviceApplied = if (Build.VERSION.SDK_INT >= 23) track.setPreferredDevice(device) else false
                             if (track.state != AudioTrack.STATE_INITIALIZED) {
                                 track.release()
                                 LogBus.e(
@@ -484,7 +481,7 @@ object AndroidUsbAudioBridge {
                             markDeviceConnected("output", bridgeDevice.id, true)
                             LogBus.i(
                                 TAG,
-                                "TX-5DR Android output backend connected: ${bridgeDevice.name} device=${device.describe()} rate=${streamHeader.sampleRate} encoding=${streamHeader.format.label}/${streamHeader.format.encoding} channelMask=MONO buffer=$bufferSize minBuffer=$minBuffer legacy=${legacyPrefix != null}",
+                                "TX-5DR Android output backend connected: ${bridgeDevice.name} kind=${bridgeDevice.kind} device=${device.describe()} rate=${streamHeader.sampleRate} encoding=${streamHeader.format.label}/${streamHeader.format.encoding} channelMask=MONO buffer=$bufferSize minBuffer=$minBuffer usage=${attrs.usage} contentType=${attrs.contentType} volumeStream=${attrs.volumeControlStream} preferredDeviceApplied=$preferredDeviceApplied legacy=${legacyPrefix != null}",
                             )
                             val jitterBuffer = PcmJitterBuffer(
                                 sampleRate = streamHeader.sampleRate,
@@ -745,6 +742,18 @@ object AndroidUsbAudioBridge {
     private fun choosePlaybackRate(device: AudioDeviceInfo?): Int {
         val rates = device?.sampleRates?.takeIf { it.isNotEmpty() } ?: sampleRates
         return sampleRates.firstOrNull { it in rates } ?: rates.first()
+    }
+
+    private fun outputAudioAttributes(device: UsbAudioDevice): AudioAttributes {
+        val (usage, contentType) = if (device.kind == AudioRoute.BUILTIN_SPEAKER) {
+            AudioAttributes.USAGE_VOICE_COMMUNICATION to AudioAttributes.CONTENT_TYPE_SPEECH
+        } else {
+            AudioAttributes.USAGE_MEDIA to AudioAttributes.CONTENT_TYPE_MUSIC
+        }
+        return AudioAttributes.Builder()
+            .setUsage(usage)
+            .setContentType(contentType)
+            .build()
     }
 
     private fun AudioDeviceInfo.isSupportedInputDevice(): Boolean = isUsbAudioDevice() || isBuiltinMicDevice()
