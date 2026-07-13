@@ -2,14 +2,19 @@ package com.tx5dr.bridge
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioRouting
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
@@ -23,17 +28,24 @@ import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 
 internal const val ANDROID_AUDIO_OUTPUT_HEADER_BYTES = 16
-private val ANDROID_AUDIO_OUTPUT_HEADER_MAGIC = byteArrayOf(
+private val ANDROID_AUDIO_OUTPUT_HEADER_MAGIC_V1 = byteArrayOf(
     'T'.code.toByte(), 'X'.code.toByte(), '5'.code.toByte(), 'D'.code.toByte(),
     'R'.code.toByte(), 'A'.code.toByte(), 'O'.code.toByte(), '1'.code.toByte(),
 )
+private val ANDROID_AUDIO_OUTPUT_HEADER_MAGIC_V2 = byteArrayOf(
+    'T'.code.toByte(), 'X'.code.toByte(), '5'.code.toByte(), 'D'.code.toByte(),
+    'R'.code.toByte(), 'A'.code.toByte(), 'O'.code.toByte(), '2'.code.toByte(),
+)
+private val ANDROID_AUDIO_OUTPUT_ROUTE_ACK = "TX5DRAK1".toByteArray(Charsets.US_ASCII)
 
 internal enum class AndroidAudioOutputPcmFormat(
     val id: Int,
@@ -49,6 +61,7 @@ internal data class AndroidAudioOutputStreamHeader(
     val sampleRate: Int,
     val format: AndroidAudioOutputPcmFormat,
     val channels: Int,
+    val routeAckRequested: Boolean = false,
 )
 
 internal sealed class AndroidAudioOutputHeaderParseResult {
@@ -61,8 +74,16 @@ internal fun parseAndroidAudioOutputHeader(bytes: ByteArray): AndroidAudioOutput
     if (bytes.size < ANDROID_AUDIO_OUTPUT_HEADER_BYTES) {
         return AndroidAudioOutputHeaderParseResult.Invalid("short header: ${bytes.size}/$ANDROID_AUDIO_OUTPUT_HEADER_BYTES bytes")
     }
-    for (i in ANDROID_AUDIO_OUTPUT_HEADER_MAGIC.indices) {
-        if (bytes[i] != ANDROID_AUDIO_OUTPUT_HEADER_MAGIC[i]) return AndroidAudioOutputHeaderParseResult.Legacy
+    val isV1 = ANDROID_AUDIO_OUTPUT_HEADER_MAGIC_V1.indices.all { bytes[it] == ANDROID_AUDIO_OUTPUT_HEADER_MAGIC_V1[it] }
+    val isV2 = ANDROID_AUDIO_OUTPUT_HEADER_MAGIC_V2.indices.all { bytes[it] == ANDROID_AUDIO_OUTPUT_HEADER_MAGIC_V2[it] }
+    if (!isV1 && !isV2) {
+        val framedPrefix = "TX5DRAO".toByteArray(Charsets.US_ASCII)
+        val looksFramed = framedPrefix.indices.all { bytes[it] == framedPrefix[it] }
+        return if (looksFramed) {
+            AndroidAudioOutputHeaderParseResult.Invalid("unsupported protocol version=${bytes[7].toInt().toChar()}")
+        } else {
+            AndroidAudioOutputHeaderParseResult.Legacy
+        }
     }
     val sampleRate = readUInt32Le(bytes, 8)
     if (sampleRate !in 8_000..192_000) {
@@ -75,7 +96,7 @@ internal fun parseAndroidAudioOutputHeader(bytes: ByteArray): AndroidAudioOutput
     if (channels != 1) {
         return AndroidAudioOutputHeaderParseResult.Invalid("unsupported channels=$channels")
     }
-    return AndroidAudioOutputHeaderParseResult.Header(AndroidAudioOutputStreamHeader(sampleRate, format, channels))
+    return AndroidAudioOutputHeaderParseResult.Header(AndroidAudioOutputStreamHeader(sampleRate, format, channels, routeAckRequested = isV2))
 }
 
 private fun readUInt32Le(bytes: ByteArray, offset: Int): Int {
@@ -86,71 +107,76 @@ private fun readUInt32Le(bytes: ByteArray, offset: Int): Int {
     return value.toInt()
 }
 
-object AudioRoute {
-    const val USB = "usb"
-    const val BUILTIN_MIC = "builtinMic"
-    const val BUILTIN_SPEAKER = "builtinSpeaker"
-}
-
-object AndroidUsbAudioBridge {
+object AndroidAudioBridge {
     private const val TAG = "AudioBridge"
     private const val STATS_INTERVAL_MS = 5000L
     private const val SLOW_INPUT_WRITE_MS = 200.0
     private const val SILENCE_PEAK_THRESHOLD = 4
+    private const val ROUTE_LOSS_DEBOUNCE_MS = 250L
     private val sampleRates = intArrayOf(48000, 44100)
-    private val listeners = CopyOnWriteArrayList<(UsbAudioStatus) -> Unit>()
+    private val listeners = CopyOnWriteArrayList<(AndroidAudioStatus) -> Unit>()
 
-    @Volatile private var status = UsbAudioStatus()
+    @Volatile private var status = AndroidAudioStatus()
     @Volatile private var running = false
     private val sessions = mutableMapOf<String, AudioSocketSession>()
+    private val nextSessionGeneration = AtomicLong(0)
+    @Volatile private var coordinatorThread: Thread? = null
+    private val coordinator = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "tx5dr-audio-coordinator").also { coordinatorThread = it }
+    }
     private var devicesFile: File? = null
     @Volatile private var deviceCallbackRegistered = false
+    @Volatile private var noisyReceiverRegistered = false
+    @Volatile private var microphoneCaptureEnabled = false
 
     fun init(context: Context, targetFile: File) {
         devicesFile = targetFile
         refreshDevices(context)
     }
 
-    fun addListener(listener: (UsbAudioStatus) -> Unit) {
+    fun addListener(listener: (AndroidAudioStatus) -> Unit) {
         listeners.add(listener)
-        runCatching { listener(status) }.onFailure { Log.w(TAG, "USB audio listener failed", it) }
+        runCatching { listener(status) }.onFailure { Log.w(TAG, "Android audio listener failed", it) }
     }
 
-    fun removeListener(listener: (UsbAudioStatus) -> Unit) {
+    fun removeListener(listener: (AndroidAudioStatus) -> Unit) {
         listeners.remove(listener)
     }
 
-    fun hasRecordPermission(context: Context): Boolean = if (Build.VERSION.SDK_INT >= 23) {
+    fun hasRecordPermission(context: Context): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    } else true
 
-    fun refreshDevices(context: Context): UsbAudioStatus {
+    fun refreshDevices(context: Context): AndroidAudioStatus {
         val manager = context.applicationContext.getSystemService(AudioManager::class.java)
-        val inputs = applyConnectionState("input", uniqueBridgeDevices(manager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
-            .filter { it.isSupportedInputDevice() && it.isSource }
-            .map { it.toBridgeDevice("input") }))
-        val outputs = applyConnectionState("output", uniqueBridgeDevices(manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
-            .filter { it.isSupportedOutputDevice() && it.isSink }
-            .map { it.toBridgeDevice("output") }))
-        val nextState = when {
-            hasRecordPermission(context) -> status.state
-            status.state == "permission-denied" -> "permission-denied"
-            else -> "permission-required"
-        }
-        update(
-            status.copy(
-                state = nextState,
-                inputDevices = inputs,
-                outputDevices = outputs,
-                error = null,
+        val detectedInputs = uniqueBridgeDevices(manager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
+            .mapNotNull { it.toBridgeDevice("input") })
+        val detectedOutputs = uniqueBridgeDevices(manager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty()
+            .mapNotNull { it.toBridgeDevice("output") })
+        return coordinated {
+            val inputs = AndroidAudioDevicePolicy.mergeEndpointState("input", detectedInputs, status.inputDevices)
+            val outputs = AndroidAudioDevicePolicy.mergeEndpointState("output", detectedOutputs, status.outputDevices)
+            val permissionGranted = hasRecordPermission(context)
+            val nextState = when {
+                running && !permissionGranted -> "output-only"
+                !permissionGranted && status.state == "permission-denied" -> "permission-denied"
+                !permissionGranted -> "permission-required"
+                else -> status.state
+            }
+            updateNow(
+                status.copy(
+                    state = nextState,
+                    inputDevices = inputs,
+                    outputDevices = outputs,
+                    recordPermissionGranted = permissionGranted,
+                    error = null,
+                )
             )
-        )
-        writeDevicesFile(devicesFile ?: BridgeRuntime.paths.androidAudioDevicesFile, inputs, outputs)
-        return status
+            status
+        }
     }
 
     fun startWatchingDevices(context: Context) {
-        if (deviceCallbackRegistered || Build.VERSION.SDK_INT < 23) return
+        if (deviceCallbackRegistered) return
         val app = context.applicationContext
         val manager = app.getSystemService(AudioManager::class.java) ?: return
         try {
@@ -167,23 +193,15 @@ object AndroidUsbAudioBridge {
         } catch (error: Throwable) {
             LogBus.w(TAG, "Unable to register audio device callback: ${error.message}")
         }
+        registerNoisyReceiver(app)
     }
 
     fun startIfPermitted(context: Context): Boolean {
-        val refreshed = refreshDevices(context)
-        if (!hasRecordPermission(context)) {
-            update(refreshed.copy(state = if (refreshed.state == "permission-denied") "permission-denied" else "permission-required", error = null))
-            return false
-        }
-        val inputs = currentInputDevices(context)
+        refreshDevices(context)
+        val inputs = if (hasRecordPermission(context)) currentInputDevices(context) else emptyList()
         val outputs = currentOutputDevices(context)
-        if (inputs.isEmpty() || outputs.isEmpty()) {
-            update(
-                refreshed.copy(
-                    state = "no-device",
-                    error = "No supported Android audio input or output device",
-                )
-            )
+        if (inputs.isEmpty() && outputs.isEmpty()) {
+            update { it.copy(state = "no-device", error = "No supported Android audio device is available") }
             return false
         }
         start(context)
@@ -192,37 +210,33 @@ object AndroidUsbAudioBridge {
 
     fun start(context: Context) {
         val app = context.applicationContext
-        if (!hasRecordPermission(app)) {
-            update(status.copy(state = "permission-required", error = "RECORD_AUDIO permission is required"))
+        refreshDevices(app)
+        val permissionGranted = hasRecordPermission(app)
+        val inputs = if (permissionGranted) currentInputDevices(app) else emptyList()
+        val outputs = currentOutputDevices(app)
+        if (inputs.isEmpty() && outputs.isEmpty()) {
+            update { it.copy(state = "no-device", error = "No supported Android audio device is available") }
             return
         }
-        BridgeService.start(app, BridgeService.ACTION_ENABLE_MICROPHONE_FOREGROUND)
-        if (running) return
-        val refreshed = refreshDevices(app)
-        val inputs = currentInputDevices(app)
-        val outputs = currentOutputDevices(app)
-        if (inputs.isEmpty() || outputs.isEmpty()) {
-            update(
-                refreshed.copy(
-                    state = "no-device",
-                    error = "No supported Android audio input or output device",
-                )
-            )
+        microphoneCaptureEnabled = permissionGranted && inputs.isNotEmpty()
+        if (microphoneCaptureEnabled) {
+            BridgeService.start(app, BridgeService.ACTION_ENABLE_MICROPHONE_FOREGROUND)
+        } else {
+            BridgeService.start(app, BridgeService.ACTION_DISABLE_MICROPHONE_FOREGROUND)
+        }
+        if (running) {
+            coordinated { startAudioSessions(app, inputs, outputs) }
+            update { it.copy(state = if (permissionGranted) "streaming" else "output-only", error = null) }
             return
         }
         running = true
-        update(
-            status.copy(
-                state = "starting",
-                error = null,
-            )
-        )
-        startAudioSessions(app, inputs, outputs)
-        update(status.copy(state = "streaming"))
+        update { it.copy(state = "starting", error = null) }
+        coordinated { startAudioSessions(app, inputs, outputs) }
+        update { it.copy(state = if (permissionGranted) "streaming" else "output-only") }
     }
 
     fun markPermissionDenied() {
-        update(status.copy(state = "permission-denied", error = null))
+        update { it.copy(state = "permission-denied", error = null) }
     }
 
     fun stop() {
@@ -242,47 +256,60 @@ object AndroidUsbAudioBridge {
 
     private fun stop(stopLinuxSide: Boolean) {
         running = false
-        val activeSessions = sessions.values.toList()
-        sessions.clear()
+        microphoneCaptureEnabled = false
+        val activeSessions = coordinated {
+            sessions.values.toList().also { sessions.clear() }
+        }
         activeSessions.forEach { it.stop() }
         BridgeService.start(BridgeRuntime.appContext(), BridgeService.ACTION_DISABLE_MICROPHONE_FOREGROUND)
         if (stopLinuxSide) BridgeRuntime.stopLinuxAudioSide()
-        update(status.copy(state = "stopped"))
+        update { current ->
+            current.copy(
+                state = "stopped",
+                inputDevices = current.inputDevices.map(AndroidAudioDevicePolicy::resetReleasedEndpoint),
+                outputDevices = current.outputDevices.map(AndroidAudioDevicePolicy::resetReleasedEndpoint),
+            )
+        }
     }
 
     private fun handleDeviceChange(context: Context, reason: String, devices: Array<out AudioDeviceInfo>) {
-        val audioChanged = devices.any { it.isSupportedInputDevice() || it.isSupportedOutputDevice() }
+        val audioChanged = devices.any { AndroidAudioDevicePolicy.classify(it.toDescriptor("input")) != null || AndroidAudioDevicePolicy.classify(it.toDescriptor("output")) != null }
         if (!audioChanged) return
         LogBus.i(TAG, "Audio device $reason")
         refreshDevices(context)
         if (running) {
-            Thread {
+            coordinator.execute {
                 runCatching {
-                    startAudioSessions(context.applicationContext, currentInputDevices(context), currentOutputDevices(context))
+                    val inputs = if (microphoneCaptureEnabled && hasRecordPermission(context)) currentInputDevices(context) else emptyList()
+                    startAudioSessions(context.applicationContext, inputs, currentOutputDevices(context))
                     refreshDevices(context)
-                    update(status.copy(state = "streaming"))
+                    update { it.copy(state = if (hasRecordPermission(context)) "streaming" else "output-only") }
                 }.onFailure { error ->
                     LogBus.e(TAG, "Audio hotplug reconcile failed", error)
-                    update(status.copy(state = "error", error = error.message))
+                    update { it.copy(state = "error", error = error.message) }
                 }
-            }.also { it.name = "tx5dr-audio-hotplug"; it.start() }
-        } else if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
-            runCatching { startIfPermitted(context) }.onFailure { error ->
-                LogBus.e(TAG, "Audio hotplug autostart failed", error)
-                update(status.copy(state = "error", error = error.message))
             }
         }
     }
 
     private fun startAudioSessions(context: Context, inputs: List<AudioDeviceInfo>, outputs: List<AudioDeviceInfo>) {
-        val desiredKeys = (inputs.map { deviceKey("input", it.id) } + outputs.map { deviceKey("output", it.id) }).toSet()
-        sessions.filterKeys { it !in desiredKeys }.values.forEach { it.stop() }
-        sessions.keys.removeAll { it !in desiredKeys }
+        val inputEndpoints = status.inputDevices.associateBy { it.id }
+        val outputEndpoints = status.outputDevices.associateBy { it.id }
+        val desiredKeys = (inputs.mapNotNull { inputEndpoints[it.id]?.routeKey } + outputs.mapNotNull { outputEndpoints[it.id]?.routeKey }).toSet()
+        sessions.filterKeys { it !in desiredKeys }.toMap().forEach { (key, session) ->
+            sessions.remove(key)
+            session.stop()
+            resetReleasedEndpointNow(key)
+        }
         inputs.forEach { device ->
-            val key = deviceKey("input", device.id)
-            if (sessions[key]?.isAlive == true) return@forEach
-            val bridgeDevice = status.inputDevices.firstOrNull { it.id == device.id } ?: device.toBridgeDevice("input")
-            AudioSocketSession(bridgeDevice).also { session ->
+            val bridgeDevice = inputEndpoints[device.id] ?: device.toBridgeDevice("input") ?: return@forEach
+            val key = bridgeDevice.routeKey
+            val existing = sessions[key]
+            if (existing?.isAlive == true && existing.device.id == bridgeDevice.id) return@forEach
+            sessions.remove(key)
+            existing?.stop()
+            if (existing != null) resetReleasedEndpointNow(key)
+            AudioSocketSession(bridgeDevice, nextSessionGeneration.incrementAndGet()).also { session ->
                 sessions[key] = session
                 session.thread = Thread { inputLoop(context, device, bridgeDevice, session) }.also { thread ->
                     thread.name = "tx5dr-audio-input-${device.id}"
@@ -291,10 +318,14 @@ object AndroidUsbAudioBridge {
             }
         }
         outputs.forEach { device ->
-            val key = deviceKey("output", device.id)
-            if (sessions[key]?.isAlive == true) return@forEach
-            val bridgeDevice = status.outputDevices.firstOrNull { it.id == device.id } ?: device.toBridgeDevice("output")
-            AudioSocketSession(bridgeDevice).also { session ->
+            val bridgeDevice = outputEndpoints[device.id] ?: device.toBridgeDevice("output") ?: return@forEach
+            val key = bridgeDevice.routeKey
+            val existing = sessions[key]
+            if (existing?.isAlive == true && existing.device.id == bridgeDevice.id) return@forEach
+            sessions.remove(key)
+            existing?.stop()
+            if (existing != null) resetReleasedEndpointNow(key)
+            AudioSocketSession(bridgeDevice, nextSessionGeneration.incrementAndGet()).also { session ->
                 sessions[key] = session
                 session.thread = Thread { outputLoop(context, device, bridgeDevice, session) }.also { thread ->
                     thread.name = "tx5dr-audio-output-${device.id}"
@@ -305,7 +336,7 @@ object AndroidUsbAudioBridge {
     }
 
     @SuppressLint("MissingPermission")
-    private fun inputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: UsbAudioDevice, session: AudioSocketSession) {
+    private fun inputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: AndroidAudioEndpoint, session: AudioSocketSession) {
         setAudioThreadPriority("input-${device.id}")
         try {
             val formatAndBuffer = chooseRecordFormat(device)
@@ -320,15 +351,15 @@ object AndroidUsbAudioBridge {
                 while (running && session.running) {
                     try {
                         server.accept().use { socket ->
-                            val recordBuild = buildRecorder(format, formatAndBuffer.bufferSize, device)
-                            val recorder = recordBuild.recorder
-                            if (Build.VERSION.SDK_INT >= 23) recorder.preferredDevice = device
-                            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                                recorder.release()
-                                error("AudioRecord failed to initialize")
+                            session.setFailAction { runCatching { socket.close() } }
+                            session.clearFailure()
+                            markEndpointState(bridgeDevice.routeKey, AudioRouteState.OPENING, clientConnected = true, session = session)
+                            val recordBuild = try {
+                                buildRecorder(format, formatAndBuffer.bufferSize, device)
+                            } catch (error: Throwable) {
+                                throw AudioRouteException(AudioRouteState.FAILED, "Unable to open Android input: ${error.message}")
                             }
-                            markDeviceConnected("input", bridgeDevice.id, true)
-                            LogBus.i(TAG, "TX-5DR Android input backend connected: ${bridgeDevice.name} source=${sourceName(recordBuild.audioSource)}")
+                            val recorder = recordBuild.recorder
                             val jitterBuffer = PcmJitterBuffer(
                                 sampleRate = formatAndBuffer.sampleRate,
                                 targetMs = formatAndBuffer.bufferTargetMs,
@@ -336,14 +367,103 @@ object AndroidUsbAudioBridge {
                                 mode = PcmJitterMode.INPUT,
                             )
                             val connected = AtomicBoolean(true)
+                            val routeVerifiedSignal = AtomicBoolean(false)
+                            val routeHandler = Handler(Looper.getMainLooper())
                             val captureError = AtomicReference<Throwable?>(null)
                             val stats = InputStats(formatAndBuffer.sampleRate, formatAndBuffer.bufferSize, jitterBuffer)
+                            fun failInputRoute(reason: String) {
+                                session.failClosed(AudioRouteState.LOST, reason)
+                                markEndpointFailure(bridgeDevice.routeKey, AudioRouteState.LOST, reason, session)
+                            }
+                            val routeListener = AudioRouting.OnRoutingChangedListener { routing ->
+                                val routed = routing.routedDevice
+                                if (connected.get() && routeVerifiedSignal.get()) {
+                                    if (routed != null && !sameAudioDevice(routed, device)) {
+                                        failInputRoute("Input route changed to ${routed.describe()}")
+                                    } else if (routed == null) {
+                                        routeHandler.postDelayed({
+                                            if (connected.get() && routeVerifiedSignal.get() && recorder.routedDevice == null) {
+                                                failInputRoute("Android removed the verified input route")
+                                            }
+                                        }, ROUTE_LOSS_DEBOUNCE_MS)
+                                    }
+                                }
+                            }
+                            recorder.addOnRoutingChangedListener(routeListener, Handler(Looper.getMainLooper()))
+                            val recordingCallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                object : AudioManager.AudioRecordingCallback() {
+                                    override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
+                                        val config = configs.firstOrNull { it.clientAudioSessionId == recorder.audioSessionId }
+                                        if (config == null) {
+                                            if (connected.get() && routeVerifiedSignal.get()) {
+                                                routeHandler.postDelayed({
+                                                    if (connected.get() && routeVerifiedSignal.get() && recorder.activeRecordingConfiguration == null) {
+                                                        failInputRoute("Android removed the active input recording configuration")
+                                                    }
+                                                }, ROUTE_LOSS_DEBOUNCE_MS)
+                                            }
+                                            return
+                                        }
+                                        val routed = config.audioDevice
+                                        val failure = when {
+                                            config.isClientSilenced -> "Android silenced the radio audio input client"
+                                            routed != null && !sameAudioDevice(routed, device) -> "Input recording moved to ${routed.describe()}"
+                                            else -> null
+                                        }
+                                        if (failure != null && connected.get()) {
+                                            failInputRoute(failure)
+                                        }
+                                    }
+                                }
+                            } else null
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && recordingCallback != null) {
+                                runCatching { recorder.registerAudioRecordingCallback(context.mainExecutor, recordingCallback) }
+                                    .onFailure { LogBus.w(TAG, "Unable to monitor Android input silencing: ${it.message}") }
+                            }
+                            session.setFailAction {
+                                connected.set(false)
+                                jitterBuffer.close()
+                                runCatching { recorder.stop() }
+                                runCatching { socket.close() }
+                            }
+                            try {
+                                val routed = awaitRoutedDevice(recorder)
+                                session.failure()?.let { failure ->
+                                    throw AudioRouteException(failure.routeState, failure.reason)
+                                }
+                                if (routed == null || !sameAudioDevice(routed, device)) {
+                                    throw AudioRouteException(
+                                        AudioRouteState.LOST,
+                                        "Input route verification failed: expected ${device.describe()}, actual ${routed?.describe() ?: "none"}",
+                                    )
+                                }
+                                routeVerifiedSignal.set(true)
+                            } catch (error: Throwable) {
+                                session.failClosed(
+                                    (error as? AudioRouteException)?.routeState ?: AudioRouteState.FAILED,
+                                    error.message ?: "Unable to start input route",
+                                )
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && recordingCallback != null) {
+                                    runCatching { recorder.unregisterAudioRecordingCallback(recordingCallback) }
+                                }
+                                recorder.removeOnRoutingChangedListener(routeListener)
+                                recorder.release()
+                                throw error
+                            }
+                            markEndpointState(
+                                bridgeDevice.routeKey,
+                                AudioRouteState.VERIFIED,
+                                clientConnected = true,
+                                routeVerified = true,
+                                audioSource = sourceName(recordBuild.audioSource),
+                                session = session,
+                            )
+                            LogBus.i(TAG, "TX-5DR Android input backend connected: ${bridgeDevice.name} source=${sourceName(recordBuild.audioSource)} routed=${routedDeviceName(recorder)}")
                             val captureThread = Thread {
                                 setAudioThreadPriority("input-capture-${device.id}")
                                 val buffer = ByteArray(formatAndBuffer.bufferSize)
                                 var sequence = 0L
                                 try {
-                                    recorder.startRecording()
                                     while (running && session.running && connected.get() && !Thread.currentThread().isInterrupted) {
                                         val beforeRead = System.nanoTime()
                                         val n = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
@@ -351,8 +471,15 @@ object AndroidUsbAudioBridge {
                                         if (n > 0) {
                                             stats.recordCaptured(buffer, n, readMs, sequence)
                                             jitterBuffer.offer(PcmChunk(buffer.copyOf(n), n, System.currentTimeMillis(), sequence++, peakAbsPcm16(buffer, n)))
+                                        } else if (n == 0) {
+                                            stats.recordReadError()
+                                            Thread.sleep(2)
                                         } else {
                                             stats.recordReadError()
+                                            throw AudioRouteException(
+                                                AudioRouteState.FAILED,
+                                                "AudioRecord read failed with code $n",
+                                            )
                                         }
                                         stats.logIfDue("Android audio input stats")
                                     }
@@ -363,7 +490,7 @@ object AndroidUsbAudioBridge {
                                 }
                             }.also { it.name = "tx5dr-android-audio-input-capture-${device.id}"; it.start() }
 
-                            update(status.copy(state = "streaming"))
+                            update { it.copy(state = "streaming") }
                             val out = socket.getOutputStream()
                             try {
                                 while (running && session.running && connected.get()) {
@@ -384,33 +511,43 @@ object AndroidUsbAudioBridge {
                                 }
                             } finally {
                                 connected.set(false)
+                                routeVerifiedSignal.set(false)
                                 jitterBuffer.close()
+                                session.clearFailAction()
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && recordingCallback != null) {
+                                    runCatching { recorder.unregisterAudioRecordingCallback(recordingCallback) }
+                                }
+                                recorder.removeOnRoutingChangedListener(routeListener)
                                 try { recorder.stop() } catch (_: Throwable) {}
                                 recorder.release()
                                 try { socket.close() } catch (_: Throwable) {}
                                 captureThread.join(1000)
-                                markDeviceConnected("input", bridgeDevice.id, false)
+                                markEndpointDisconnected(bridgeDevice.routeKey, session)
                                 captureError.get()?.let { throw it }
                                 LogBus.i(TAG, "TX-5DR Android input backend disconnected: ${bridgeDevice.name}")
                             }
                         }
                     } catch (error: Throwable) {
-                        if (running && session.running) LogBus.w(TAG, "Android audio input client ended for ${bridgeDevice.name}: ${error.message}")
+                        if (running && session.running) {
+                            if (error is AudioRouteException) session.recordFailure(error.routeState, error.message ?: "Input route failed")
+                            markEndpointDisconnected(bridgeDevice.routeKey, session)
+                            LogBus.w(TAG, "Android audio input client ended for ${bridgeDevice.name}: ${error.message}")
+                        }
                     }
                 }
             }
         } catch (error: Throwable) {
             if (running) {
-                LogBus.e(TAG, "USB audio input bridge failed", error)
-                update(status.copy(state = "error", error = error.message))
+                LogBus.e(TAG, "Android audio input bridge failed", error)
+                update { it.copy(state = "error", error = error.message) }
             }
         } finally {
-            markDeviceConnected("input", bridgeDevice.id, false)
+            markEndpointDisconnected(bridgeDevice.routeKey, session)
             session.server = null
         }
     }
 
-    private fun outputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: UsbAudioDevice, session: AudioSocketSession) {
+    private fun outputLoop(context: Context, device: AudioDeviceInfo, bridgeDevice: AndroidAudioEndpoint, session: AudioSocketSession) {
         setAudioThreadPriority("output-${device.id}")
         try {
             val targetMs = bufferTargetMs()
@@ -421,6 +558,8 @@ object AndroidUsbAudioBridge {
                 while (running && session.running) {
                     try {
                         server.accept().use { socket ->
+                            session.setFailAction { runCatching { socket.close() } }
+                            session.clearFailure()
                             val input = socket.getInputStream()
                             val prefix = readExactly(input, ANDROID_AUDIO_OUTPUT_HEADER_BYTES)
                             if (prefix == null) {
@@ -448,11 +587,10 @@ object AndroidUsbAudioBridge {
                                 streamHeader.format.encoding,
                             )
                             if (minBuffer <= 0) {
-                                LogBus.e(
-                                    TAG,
-                                    "Unsupported Android AudioTrack output contract device=${bridgeDevice.name} rate=${streamHeader.sampleRate} format=${streamHeader.format.label} channels=${streamHeader.channels} minBuffer=$minBuffer",
+                                throw AudioRouteException(
+                                    AudioRouteState.FAILED,
+                                    "Unsupported Android output contract rate=${streamHeader.sampleRate} format=${streamHeader.format.label} minBuffer=$minBuffer",
                                 )
-                                return@use
                             }
                             val bufferSize = bufferSizeFor(streamHeader.sampleRate, minBuffer, targetMs, streamHeader.format.bytesPerSample)
                             val format = AudioFormat.Builder()
@@ -465,20 +603,22 @@ object AndroidUsbAudioBridge {
                                 .setAudioFormat(format)
                                 .setBufferSizeInBytes(bufferSize)
                                 .setTransferMode(AudioTrack.MODE_STREAM)
-                            if (Build.VERSION.SDK_INT >= 26) {
-                                trackBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                            trackBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                            val track = try {
+                                trackBuilder.build()
+                            } catch (error: Throwable) {
+                                throw AudioRouteException(AudioRouteState.FAILED, "Unable to open Android output: ${error.message}")
                             }
-                            val track = trackBuilder.build()
-                            val preferredDeviceApplied = if (Build.VERSION.SDK_INT >= 23) track.setPreferredDevice(device) else false
                             if (track.state != AudioTrack.STATE_INITIALIZED) {
                                 track.release()
-                                LogBus.e(
-                                    TAG,
-                                    "AudioTrack failed to initialize for device=${bridgeDevice.name} rate=${streamHeader.sampleRate} format=${streamHeader.format.label} channels=${streamHeader.channels} buffer=$bufferSize",
-                                )
-                                return@use
+                                throw AudioRouteException(AudioRouteState.FAILED, "AudioTrack failed to initialize for ${bridgeDevice.name}")
                             }
-                            markDeviceConnected("output", bridgeDevice.id, true)
+                            val preferredDeviceApplied = track.setPreferredDevice(device)
+                            if (!preferredDeviceApplied) {
+                                track.release()
+                                throw AudioRouteException(AudioRouteState.FAILED, "Android rejected the requested output route")
+                            }
+                            markEndpointState(bridgeDevice.routeKey, AudioRouteState.OPENING, clientConnected = true, session = session)
                             LogBus.i(
                                 TAG,
                                 "TX-5DR Android output backend connected: ${bridgeDevice.name} kind=${bridgeDevice.kind} device=${device.describe()} rate=${streamHeader.sampleRate} encoding=${streamHeader.format.label}/${streamHeader.format.encoding} channelMask=MONO buffer=$bufferSize minBuffer=$minBuffer usage=${attrs.usage} contentType=${attrs.contentType} volumeStream=${attrs.volumeControlStream} preferredDeviceApplied=$preferredDeviceApplied legacy=${legacyPrefix != null}",
@@ -491,8 +631,68 @@ object AndroidUsbAudioBridge {
                                 bytesPerSample = streamHeader.format.bytesPerSample,
                             )
                             val connected = AtomicBoolean(true)
+                            val routeVerifiedSignal = AtomicBoolean(false)
+                            val routeHandler = Handler(Looper.getMainLooper())
                             val readerError = AtomicReference<Throwable?>(null)
                             val stats = OutputStats(streamHeader.sampleRate, streamHeader.format.label, streamHeader.format.bytesPerSample, bufferSize, jitterBuffer)
+                            val manager = context.getSystemService(AudioManager::class.java)
+                            val focusRequest = AtomicReference<AudioFocusRequest?>(null)
+                            val requiresExclusiveFocus = bridgeDevice.kind in setOf(
+                                AudioRoute.WIRED_HEADSET,
+                                AudioRoute.WIRED_HEADPHONES,
+                                AudioRoute.ANALOG_LINE,
+                            )
+                            fun abandonAudioFocus() {
+                                focusRequest.getAndSet(null)?.let { request ->
+                                    runCatching { manager?.abandonAudioFocusRequest(request) }
+                                }
+                            }
+                            fun requestAudioFocusOrFail() {
+                                if (!requiresExclusiveFocus || focusRequest.get() != null) return
+                                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                                    .setAudioAttributes(attrs)
+                                    .setAcceptsDelayedFocusGain(false)
+                                    .setOnAudioFocusChangeListener({ change ->
+                                        if (change != AudioManager.AUDIOFOCUS_GAIN && connected.get()) {
+                                            val reason = "Exclusive audio focus was lost while using the analog output"
+                                            session.failClosed(AudioRouteState.LOST, reason)
+                                            markEndpointFailure(bridgeDevice.routeKey, AudioRouteState.LOST, reason, session)
+                                        }
+                                    }, Handler(Looper.getMainLooper()))
+                                    .build()
+                                if (manager?.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                                    val reason = "Exclusive audio focus is unavailable for the analog output"
+                                    session.recordFailure(AudioRouteState.FAILED, reason)
+                                    throw AudioRouteException(AudioRouteState.FAILED, reason)
+                                }
+                                focusRequest.set(request)
+                            }
+                            val routeListener = AudioRouting.OnRoutingChangedListener { routing ->
+                                val routed = routing.routedDevice
+                                if (connected.get() && routeVerifiedSignal.get()) {
+                                    if (routed != null && !sameAudioDevice(routed, device)) {
+                                        val reason = "Output route changed to ${routed.describe()}"
+                                        session.failClosed(AudioRouteState.LOST, reason)
+                                        markEndpointFailure(bridgeDevice.routeKey, AudioRouteState.LOST, reason, session)
+                                    } else if (routed == null) {
+                                        routeHandler.postDelayed({
+                                            if (connected.get() && routeVerifiedSignal.get() && track.routedDevice == null) {
+                                                val reason = "Android removed the verified output route"
+                                                session.failClosed(AudioRouteState.LOST, reason)
+                                                markEndpointFailure(bridgeDevice.routeKey, AudioRouteState.LOST, reason, session)
+                                            }
+                                        }, ROUTE_LOSS_DEBOUNCE_MS)
+                                    }
+                                }
+                            }
+                            track.addOnRoutingChangedListener(routeListener, Handler(Looper.getMainLooper()))
+                            session.setFailAction {
+                                connected.set(false)
+                                jitterBuffer.close()
+                                abandonAudioFocus()
+                                pauseFlush(track)
+                                runCatching { socket.close() }
+                            }
                             var nextSequence = 0L
                             if (legacyPrefix != null) {
                                 stats.recordSocketRead(legacyPrefix.size, 0.0, nextSequence)
@@ -541,7 +741,50 @@ object AndroidUsbAudioBridge {
                             }.also { it.name = "tx5dr-android-audio-output-reader-${device.id}"; it.start() }
 
                             var active = false
+                            fun activateAndVerifyRoute() {
+                                requestAudioFocusOrFail()
+                                pauseFlush(track)
+                                track.play()
+                                if (!primeOutputRoute(track, streamHeader)) {
+                                    val reason = "Unable to prime the requested output route"
+                                    session.failClosed(AudioRouteState.FAILED, reason)
+                                    throw AudioRouteException(AudioRouteState.FAILED, reason)
+                                }
+                                val routed = awaitRoutedDevice(track)
+                                session.failure()?.let { failure ->
+                                    throw AudioRouteException(failure.routeState, failure.reason)
+                                }
+                                if (routed == null || !sameAudioDevice(routed, device)) {
+                                    val reason = "Output route verification failed: expected ${device.describe()}, actual ${routed?.describe() ?: "none"}"
+                                    session.failClosed(AudioRouteState.LOST, reason)
+                                    throw AudioRouteException(AudioRouteState.LOST, reason)
+                                }
+                                routeVerifiedSignal.set(true)
+                                markEndpointState(
+                                    bridgeDevice.routeKey,
+                                    AudioRouteState.VERIFIED,
+                                    clientConnected = true,
+                                    routeVerified = true,
+                                    session = session,
+                                )
+                                active = true
+                                stats.recordFlush()
+                            }
                             try {
+                                if (streamHeader.routeAckRequested) {
+                                    activateAndVerifyRoute()
+                                    try {
+                                        socket.getOutputStream().apply {
+                                            write(ANDROID_AUDIO_OUTPUT_ROUTE_ACK)
+                                            flush()
+                                        }
+                                    } catch (error: Throwable) {
+                                        val reason = "Unable to acknowledge the verified output route: ${error.message}"
+                                        session.failClosed(AudioRouteState.FAILED, reason)
+                                        throw AudioRouteException(AudioRouteState.FAILED, reason)
+                                    }
+                                    LogBus.i(TAG, "Output route-ready ACK sent for ${bridgeDevice.routeKey}")
+                                }
                                 while (running && session.running && connected.get()) {
                                     val take = jitterBuffer.take(500)
                                     when (take.state) {
@@ -553,6 +796,14 @@ object AndroidUsbAudioBridge {
                                         PcmTakeState.UNDERRUN -> {
                                             if (active) {
                                                 pauseFlush(track)
+                                                routeVerifiedSignal.set(false)
+                                                abandonAudioFocus()
+                                                markEndpointState(
+                                                    bridgeDevice.routeKey,
+                                                    AudioRouteState.OPENING,
+                                                    clientConnected = true,
+                                                    session = session,
+                                                )
                                                 active = false
                                                 stats.recordFlush()
                                             }
@@ -569,10 +820,7 @@ object AndroidUsbAudioBridge {
                                     }
 
                                     if (!active) {
-                                        pauseFlush(track)
-                                        track.play()
-                                        active = true
-                                        stats.recordFlush()
+                                        activateAndVerifyRoute()
                                     }
 
                                     if (!writePcmFully(track, chunk, streamHeader.format, stats, connected, session, ageMs)) break
@@ -580,28 +828,36 @@ object AndroidUsbAudioBridge {
                                 }
                             } finally {
                                 connected.set(false)
+                                routeVerifiedSignal.set(false)
                                 jitterBuffer.close()
+                                abandonAudioFocus()
+                                session.clearFailAction()
+                                track.removeOnRoutingChangedListener(routeListener)
                                 pauseFlush(track)
                                 track.release()
                                 try { socket.close() } catch (_: Throwable) {}
                                 readerThread.join(1000)
-                                markDeviceConnected("output", bridgeDevice.id, false)
+                                markEndpointDisconnected(bridgeDevice.routeKey, session)
                                 readerError.get()?.let { throw it }
                                 LogBus.i(TAG, "TX-5DR Android output backend disconnected: ${bridgeDevice.name}")
                             }
                         }
                     } catch (error: Throwable) {
-                        if (running && session.running) LogBus.w(TAG, "Android audio output client ended for ${bridgeDevice.name}: ${error.message}")
+                        if (running && session.running) {
+                            if (error is AudioRouteException) session.recordFailure(error.routeState, error.message ?: "Output route failed")
+                            markEndpointDisconnected(bridgeDevice.routeKey, session)
+                            LogBus.w(TAG, "Android audio output client ended for ${bridgeDevice.name}: ${error.message}")
+                        }
                     }
                 }
             }
         } catch (error: Throwable) {
             if (running) {
-                LogBus.e(TAG, "USB audio output bridge failed", error)
-                update(status.copy(state = "error", error = error.message))
+                LogBus.e(TAG, "Android audio output bridge failed", error)
+                update { it.copy(state = "error", error = error.message) }
             }
         } finally {
-            markDeviceConnected("output", bridgeDevice.id, false)
+            markEndpointDisconnected(bridgeDevice.routeKey, session)
             session.server = null
         }
     }
@@ -609,6 +865,16 @@ object AndroidUsbAudioBridge {
     private fun pauseFlush(track: AudioTrack) {
         try { track.pause() } catch (_: Throwable) {}
         try { track.flush() } catch (_: Throwable) {}
+    }
+
+    private fun primeOutputRoute(track: AudioTrack, header: AndroidAudioOutputStreamHeader): Boolean {
+        val sampleCount = (header.sampleRate / 100).coerceAtLeast(1)
+        return when (header.format) {
+            AndroidAudioOutputPcmFormat.S16LE ->
+                track.write(ByteArray(sampleCount * 2), 0, sampleCount * 2, AudioTrack.WRITE_BLOCKING) > 0
+            AndroidAudioOutputPcmFormat.F32LE ->
+                track.write(FloatArray(sampleCount), 0, sampleCount, AudioTrack.WRITE_BLOCKING) > 0
+        }
     }
 
     private fun writePcmFully(
@@ -651,6 +917,7 @@ object AndroidUsbAudioBridge {
                     stats.recordZeroWrite(writeMs)
                     if (noProgressWrites >= 3) {
                         stats.recordDroppedRemainder(chunk.length - offset)
+                        session.recordFailure(AudioRouteState.FAILED, "AudioTrack int16 output stopped making progress")
                         return false
                     }
                     Thread.sleep(1)
@@ -659,6 +926,7 @@ object AndroidUsbAudioBridge {
                     stats.recordWriteError()
                     stats.recordDroppedRemainder(chunk.length - offset)
                     LogBus.w(TAG, "AudioTrack int16 write failed with code $written after ${offset}/${chunk.length} bytes")
+                    session.recordFailure(AudioRouteState.FAILED, "AudioTrack int16 write failed with code $written")
                     return false
                 }
             }
@@ -698,6 +966,7 @@ object AndroidUsbAudioBridge {
                     stats.recordZeroWrite(writeMs)
                     if (noProgressWrites >= 3) {
                         stats.recordDroppedRemainder((samples.size - sampleOffset) * AndroidAudioOutputPcmFormat.F32LE.bytesPerSample)
+                        session.recordFailure(AudioRouteState.FAILED, "AudioTrack float32 output stopped making progress")
                         return false
                     }
                     Thread.sleep(1)
@@ -706,6 +975,7 @@ object AndroidUsbAudioBridge {
                     stats.recordWriteError()
                     stats.recordDroppedRemainder((samples.size - sampleOffset) * AndroidAudioOutputPcmFormat.F32LE.bytesPerSample)
                     LogBus.w(TAG, "AudioTrack float32 write failed with code $writtenSamples after ${sampleOffset}/${samples.size} samples")
+                    session.recordFailure(AudioRouteState.FAILED, "AudioTrack float32 write failed with code $writtenSamples")
                     return false
                 }
             }
@@ -721,13 +991,13 @@ object AndroidUsbAudioBridge {
         context.applicationContext.getSystemService(AudioManager::class.java)
             ?.getDevices(AudioManager.GET_DEVICES_INPUTS)
             .orEmpty()
-            .filter { it.isSupportedInputDevice() && it.isSource }
+            .filter { AndroidAudioDevicePolicy.classify(it.toDescriptor("input")) != null }
 
     private fun currentOutputDevices(context: Context): List<AudioDeviceInfo> =
         context.applicationContext.getSystemService(AudioManager::class.java)
             ?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .orEmpty()
-            .filter { it.isSupportedOutputDevice() && it.isSink }
+            .filter { AndroidAudioDevicePolicy.classify(it.toDescriptor("output")) != null }
 
     private fun chooseRecordFormat(device: AudioDeviceInfo?): AudioFormatChoice {
         val rates = device?.sampleRates?.takeIf { it.isNotEmpty() } ?: sampleRates
@@ -744,7 +1014,7 @@ object AndroidUsbAudioBridge {
         return sampleRates.firstOrNull { it in rates } ?: rates.first()
     }
 
-    private fun outputAudioAttributes(device: UsbAudioDevice): AudioAttributes {
+    private fun outputAudioAttributes(device: AndroidAudioEndpoint): AudioAttributes {
         val (usage, contentType) = if (device.kind == AudioRoute.BUILTIN_SPEAKER) {
             AudioAttributes.USAGE_VOICE_COMMUNICATION to AudioAttributes.CONTENT_TYPE_SPEECH
         } else {
@@ -756,37 +1026,25 @@ object AndroidUsbAudioBridge {
             .build()
     }
 
-    private fun AudioDeviceInfo.isSupportedInputDevice(): Boolean = isUsbAudioDevice() || isBuiltinMicDevice()
-
-    private fun AudioDeviceInfo.isSupportedOutputDevice(): Boolean = isUsbAudioDevice() || isBuiltinSpeakerDevice()
-
-    private fun AudioDeviceInfo.isUsbAudioDevice(): Boolean = type == AudioDeviceInfo.TYPE_USB_DEVICE || type == AudioDeviceInfo.TYPE_USB_HEADSET
-
-    private fun AudioDeviceInfo.isBuiltinMicDevice(): Boolean = type == AudioDeviceInfo.TYPE_BUILTIN_MIC
-
-    private fun AudioDeviceInfo.isBuiltinSpeakerDevice(): Boolean =
-        type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
-            (Build.VERSION.SDK_INT >= 31 && type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE)
-
-    private fun AudioDeviceInfo.toBridgeDevice(direction: String): UsbAudioDevice = UsbAudioDevice(
-        id = id,
-        direction = direction,
-        kind = when {
-            isUsbAudioDevice() -> AudioRoute.USB
-            isBuiltinMicDevice() -> AudioRoute.BUILTIN_MIC
-            isBuiltinSpeakerDevice() -> AudioRoute.BUILTIN_SPEAKER
-            else -> "unknown"
-        },
+    private fun AudioDeviceInfo.toDescriptor(direction: String) = AndroidAudioDeviceDescriptor(
+        androidDeviceId = id,
         type = type,
-        name = productName?.toString()?.takeIf { it.isNotBlank() } ?: fallbackDeviceName(),
+        isSource = isSource,
+        isSink = isSink,
+        direction = direction,
+        productName = productName?.toString()?.takeIf { it.isNotBlank() } ?: fallbackDeviceName(direction),
+        address = address.orEmpty(),
         sampleRates = sampleRates.toList(),
         channelCounts = channelCounts.toList(),
-        socketPath = "/opt/tx5dr-data/runtime/sockets/audio-$direction-$id.sock",
     )
 
-    private fun uniqueBridgeDevices(devices: List<UsbAudioDevice>): List<UsbAudioDevice> {
+    private fun AudioDeviceInfo.toBridgeDevice(direction: String): AndroidAudioEndpoint? =
+        AndroidAudioDevicePolicy.classify(toDescriptor(direction))
+
+    private fun uniqueBridgeDevices(devices: List<AndroidAudioEndpoint>): List<AndroidAudioEndpoint> {
+        val identified = AndroidAudioDevicePolicy.makeIdentitiesUnique(devices)
         val counts = mutableMapOf<String, Int>()
-        return devices.map { device ->
+        return identified.map { device ->
             val base = "[Android] ${device.name}"
             val count = (counts[base] ?: 0) + 1
             counts[base] = count
@@ -794,36 +1052,35 @@ object AndroidUsbAudioBridge {
         }
     }
 
-    private fun applyConnectionState(direction: String, devices: List<UsbAudioDevice>): List<UsbAudioDevice> =
-        devices.map { device ->
-            val connected = sessions[deviceKey(direction, device.id)]?.connected == true
-            device.copy(connected = connected)
-        }
-
-    private fun deviceKey(direction: String, id: Int): String = "$direction:$id"
-
     private fun androidSocketFile(prootPath: String): File =
         File(BridgeRuntime.paths.socketsDir, prootPath.substringAfterLast('/'))
 
-    private fun writeDevicesFile(target: File, inputs: List<UsbAudioDevice>, outputs: List<UsbAudioDevice>) {
-        val inputDefault = defaultInputDevice(inputs)
-        val outputDefault = defaultOutputDevice(outputs)
-        fun toJson(device: UsbAudioDevice, isDefault: Boolean) = JSONObject()
-            .put("id", "android-${device.direction}-${device.id}")
-            .put("androidDeviceId", device.id)
-            .put("name", device.name)
-            .put("direction", device.direction)
-            .put("kind", device.kind)
-            .put("type", device.type)
-            .put("channels", 1)
-            .put("sampleRate", preferredSampleRate(device.sampleRates))
-            .put("sampleRates", JSONArray(device.sampleRates.ifEmpty { sampleRates.toList() }))
-            .put("format", "s16le")
-            .put("formats", JSONArray(listOf("s16le", "f32le")))
-            .put("socketPath", device.socketPath)
-            .put("available", true)
-            .put("isDefault", isDefault)
+    private fun writeDevicesFile(target: File, inputs: List<AndroidAudioEndpoint>, outputs: List<AndroidAudioEndpoint>) {
+        val inputDefault = AndroidAudioDevicePolicy.defaultEndpoint(inputs, "input")
+        val outputDefault = AndroidAudioDevicePolicy.defaultEndpoint(outputs, "output")
+        fun toJson(device: AndroidAudioEndpoint, isDefault: Boolean): JSONObject {
+            val json = JSONObject()
+            AndroidAudioDevicePolicy.manifestFields(device, isDefault).forEach { (key, value) ->
+                if (value != null) json.put(key, value)
+            }
+            return json
+                .put("channels", 1)
+                .put("sampleRate", AndroidAudioDevicePolicy.preferredSampleRate(device.sampleRates))
+                .put("sampleRates", JSONArray(device.sampleRates.ifEmpty { sampleRates.toList() }))
+                .put("format", "s16le")
+                .put("formats", JSONArray(if (device.direction == "output") listOf("s16le", "f32le") else listOf("s16le")))
+                .put("capabilities", JSONObject().also { capabilities ->
+                    AndroidAudioDevicePolicy.capabilityFields(device).forEach { (key, value) ->
+                        when (value) {
+                            null -> Unit
+                            is Collection<*> -> capabilities.put(key, JSONArray(value))
+                            else -> capabilities.put(key, value)
+                        }
+                    }
+                })
+        }
         val root = JSONObject()
+            .put("schemaVersion", 2)
             .put("updatedAt", System.currentTimeMillis())
             .put("socketDir", "/opt/tx5dr-data/runtime/sockets")
             .put("format", "s16le")
@@ -831,55 +1088,72 @@ object AndroidUsbAudioBridge {
             .put("channels", 1)
             .put("bufferTargetMs", bufferTargetMs())
         val inputArray = JSONArray()
-        inputs.forEach { inputArray.put(toJson(it, it.id == inputDefault?.id)) }
+        inputs.forEach { inputArray.put(toJson(it, it.routeKey == inputDefault?.routeKey)) }
         val outputArray = JSONArray()
-        outputs.forEach { outputArray.put(toJson(it, it.id == outputDefault?.id)) }
+        outputs.forEach { outputArray.put(toJson(it, it.routeKey == outputDefault?.routeKey)) }
         root.put("inputDevices", inputArray)
         root.put("outputDevices", outputArray)
         runCatching {
             target.parentFile?.mkdirs()
-            target.writeText(root.toString(2))
+            val temp = File(target.parentFile, ".${target.name}.tmp")
+            temp.writeText(root.toString(2))
+            if (!temp.renameTo(target)) {
+                target.writeText(temp.readText())
+                temp.delete()
+            }
         }.onFailure { error -> LogBus.w(TAG, "Failed to write audio devices file: ${error.message}") }
     }
 
-    private fun defaultInputDevice(inputs: List<UsbAudioDevice>): UsbAudioDevice? =
-        inputs.firstOrNull { it.kind == AudioRoute.USB } ?: inputs.firstOrNull { it.kind == AudioRoute.BUILTIN_MIC } ?: inputs.firstOrNull()
-
-    private fun defaultOutputDevice(outputs: List<UsbAudioDevice>): UsbAudioDevice? =
-        outputs.firstOrNull { it.kind == AudioRoute.USB } ?: outputs.firstOrNull { it.kind == AudioRoute.BUILTIN_SPEAKER } ?: outputs.firstOrNull()
-
-    private fun preferredSampleRate(rates: List<Int>): Int =
-        sampleRates.firstOrNull { it in rates }.let { it ?: rates.firstOrNull() ?: 48000 }
-
-    private fun AudioDeviceInfo.fallbackDeviceName(): String = when {
-        isBuiltinMicDevice() -> "Phone microphone"
-        isBuiltinSpeakerDevice() -> "Phone speaker"
-        isUsbAudioDevice() -> "USB Audio $id"
+    private fun AudioDeviceInfo.fallbackDeviceName(direction: String): String = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Phone microphone"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Phone speaker"
+        AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET -> "USB Audio $id"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired headset"
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired headphones"
+        AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_AUX_LINE -> "Analog line ${if (direction == "input") "input" else "output"}"
         else -> "Audio device $id"
     }
 
-    private fun AudioDeviceInfo.describe(): String = "${fallbackDeviceName()}(id=$id,type=$type,name=${productName ?: "unknown"})"
+    private fun AudioDeviceInfo.describe(): String = "${fallbackDeviceName(if (isSource) "input" else "output")}(id=$id,type=$type,name=${productName ?: "unknown"},address=$address)"
 
     private fun buildRecorder(format: AudioFormat, bufferSize: Int, device: AudioDeviceInfo): AudioRecordBuild {
-        val sources = if (device.isBuiltinMicDevice()) {
-            listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.DEFAULT)
-        } else {
-            listOf(MediaRecorder.AudioSource.DEFAULT)
+        val kind = device.toBridgeDevice("input")?.kind ?: AudioRoute.USB
+        val sources = AndroidAudioDevicePolicy.captureProfiles(kind).map { profile ->
+            when (profile) {
+                AndroidAudioCaptureProfile.UNPROCESSED -> MediaRecorder.AudioSource.UNPROCESSED
+                AndroidAudioCaptureProfile.VOICE_RECOGNITION -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+                AndroidAudioCaptureProfile.DEFAULT -> MediaRecorder.AudioSource.DEFAULT
+            }
         }
         var lastError: Throwable? = null
         for (source in sources.distinct()) {
+            var recorder: AudioRecord? = null
             try {
-                val recorder = AudioRecord.Builder()
+                recorder = AudioRecord.Builder()
                     .setAudioSource(source)
                     .setAudioFormat(format)
                     .setBufferSizeInBytes(bufferSize)
                     .build()
-                if (recorder.state == AudioRecord.STATE_INITIALIZED) {
-                    return AudioRecordBuild(recorder, source)
+                if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                    throw IllegalStateException("AudioRecord failed to initialize with source=${sourceName(source)}")
                 }
-                recorder.release()
+                if (!recorder.setPreferredDevice(device)) {
+                    throw IllegalStateException("Android rejected the input route with source=${sourceName(source)}")
+                }
+                recorder.startRecording()
+                val routed = awaitRoutedDevice(recorder)
+                if (routed == null || !sameAudioDevice(routed, device)) {
+                    throw IllegalStateException(
+                        "Input route mismatch with source=${sourceName(source)} expected=${device.describe()} actual=${routed?.describe() ?: "none"}",
+                    )
+                }
+                if (!running) throw IllegalStateException("Android audio bridge stopped while opening input")
+                return AudioRecordBuild(recorder, source)
             } catch (error: Throwable) {
                 lastError = error
+                runCatching { recorder?.stop() }
+                runCatching { recorder?.release() }
+                LogBus.w(TAG, "Android input source ${sourceName(source)} unavailable: ${error.message}")
             }
         }
         lastError?.let { throw it }
@@ -893,24 +1167,129 @@ object AndroidUsbAudioBridge {
         else -> source.toString()
     }
 
-    private fun update(next: UsbAudioStatus) {
-        status = next
-        listeners.forEach { listener ->
-            runCatching { listener(next) }.onFailure { Log.w(TAG, "USB audio listener failed", it) }
-        }
-        LogBus.i(TAG, "USB audio state=${next.state}, inputs=${next.inputDevices.size}, outputs=${next.outputDevices.size}${next.error?.let { ", error=$it" } ?: ""}")
+    private fun update(reducer: (AndroidAudioStatus) -> AndroidAudioStatus) {
+        val applyUpdate = { updateNow(reducer(status)) }
+        if (Thread.currentThread() === coordinatorThread) applyUpdate()
+        else coordinator.execute { applyUpdate() }
     }
 
-    private fun markDeviceConnected(direction: String, id: Int, connected: Boolean) {
-        sessions[deviceKey(direction, id)]?.connected = connected
-        val current = status
-        val next = when (direction) {
-            "input" -> current.copy(inputDevices = current.inputDevices.map { if (it.id == id) it.copy(connected = connected) else it })
-            "output" -> current.copy(outputDevices = current.outputDevices.map { if (it.id == id) it.copy(connected = connected) else it })
-            else -> current
+    private fun updateNow(next: AndroidAudioStatus) {
+        status = next
+        listeners.forEach { listener ->
+            runCatching { listener(next) }.onFailure { Log.w(TAG, "Android audio listener failed", it) }
         }
-        update(next)
+        devicesFile?.let { writeDevicesFile(it, next.inputDevices, next.outputDevices) }
+        LogBus.i(TAG, "Android audio state=${next.state}, inputs=${next.inputDevices.size}, outputs=${next.outputDevices.size}${next.error?.let { ", error=$it" } ?: ""}")
     }
+
+    private fun markEndpointState(
+        routeKey: String,
+        routeState: String,
+        clientConnected: Boolean,
+        routeVerified: Boolean = false,
+        failureReason: String? = null,
+        audioSource: String? = null,
+        session: AudioSocketSession? = null,
+    ) {
+        val applyState = applyState@{
+            val currentGeneration = sessions[routeKey]?.generation
+            if (session != null && !isCurrentAudioSessionGeneration(session.generation, currentGeneration)) {
+                return@applyState
+            }
+            fun updateEndpoint(endpoint: AndroidAudioEndpoint): AndroidAudioEndpoint = if (endpoint.routeKey == routeKey) {
+                endpoint.copy(
+                    clientConnected = clientConnected,
+                    routeState = routeState,
+                    routeVerified = routeVerified,
+                    failureReason = failureReason,
+                    audioSource = audioSource ?: endpoint.audioSource,
+                )
+            } else endpoint
+            updateNow(status.copy(
+                inputDevices = status.inputDevices.map(::updateEndpoint),
+                outputDevices = status.outputDevices.map(::updateEndpoint),
+            ))
+        }
+        if (Thread.currentThread() === coordinatorThread) applyState() else coordinator.execute { applyState() }
+    }
+
+    private fun markEndpointFailure(routeKey: String, routeState: String, reason: String, session: AudioSocketSession) {
+        coordinator.execute {
+            markEndpointState(routeKey, routeState, clientConnected = false, routeVerified = false, failureReason = reason, session = session)
+        }
+    }
+
+    private fun markEndpointDisconnected(routeKey: String, session: AudioSocketSession) {
+        coordinator.execute {
+            if (!isCurrentAudioSessionGeneration(session.generation, sessions[routeKey]?.generation)) return@execute
+            val endpoint = (status.inputDevices + status.outputDevices).firstOrNull { it.routeKey == routeKey }
+            if (endpoint?.available == false) return@execute
+            val failure = session.failure()
+            if (failure == null) {
+                markEndpointState(routeKey, AudioRouteState.IDLE, clientConnected = false, session = session)
+            } else {
+                markEndpointState(routeKey, failure.routeState, clientConnected = false, failureReason = failure.reason, session = session)
+            }
+        }
+    }
+
+    private fun resetReleasedEndpointNow(routeKey: String) {
+        fun reset(endpoint: AndroidAudioEndpoint) = if (endpoint.routeKey == routeKey) {
+            AndroidAudioDevicePolicy.resetReleasedEndpoint(endpoint)
+        } else endpoint
+        updateNow(status.copy(
+            inputDevices = status.inputDevices.map(::reset),
+            outputDevices = status.outputDevices.map(::reset),
+        ))
+    }
+
+    private fun <T> coordinated(block: () -> T): T {
+        if (Thread.currentThread() === coordinatorThread) return block()
+        return coordinator.submit<T> { block() }.get()
+    }
+
+    private fun registerNoisyReceiver(context: Context) {
+        if (noisyReceiverRegistered) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
+                coordinator.execute {
+                    sessions.values.filter { session ->
+                        session.device.direction == "output" &&
+                            session.device.kind in setOf(AudioRoute.WIRED_HEADSET, AudioRoute.WIRED_HEADPHONES, AudioRoute.ANALOG_LINE)
+                    }.forEach { session ->
+                        val reason = "Physical output route became noisy or was disconnected"
+                        session.failClosed(AudioRouteState.LOST, reason)
+                        markEndpointState(session.device.routeKey, AudioRouteState.LOST, clientConnected = false, failureReason = reason, session = session)
+                    }
+                }
+            }
+        }
+        runCatching {
+            val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+            if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            else @Suppress("DEPRECATION") context.registerReceiver(receiver, filter)
+            noisyReceiverRegistered = true
+        }.onFailure { LogBus.w(TAG, "Unable to register audio noisy receiver: ${it.message}") }
+    }
+
+    private fun awaitRoutedDevice(routing: AudioRouting, timeoutMs: Long = 750): AudioDeviceInfo? {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        var routed = routing.routedDevice
+        while (routed == null && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+            routed = routing.routedDevice
+        }
+        return routed
+    }
+
+    private fun sameAudioDevice(actual: AudioDeviceInfo, expected: AudioDeviceInfo): Boolean = actual.id == expected.id
+
+    private fun routedDeviceName(routing: AudioRouting): String = routing.routedDevice?.describe() ?: "none"
+
+    private class AudioRouteException(val routeState: String, message: String) : IllegalStateException(message)
+
+    private data class SessionFailure(val routeState: String, val reason: String)
 
     private fun elapsedMsSince(startNanos: Long): Double = (System.nanoTime() - startNanos) / 1_000_000.0
 
@@ -989,16 +1368,40 @@ object AndroidUsbAudioBridge {
 
     private data class AudioRecordBuild(val recorder: AudioRecord, val audioSource: Int)
 
-    private class AudioSocketSession(val device: UsbAudioDevice) {
+    private class AudioSocketSession(val device: AndroidAudioEndpoint, val generation: Long) {
         @Volatile var running = true
         @Volatile var server: AndroidUnixSocketServer? = null
         @Volatile var thread: Thread? = null
-        @Volatile var connected: Boolean = false
+        private val failure = AtomicReference<SessionFailure?>(null)
+        private val failAction = AtomicReference<(() -> Unit)?>(null)
         val isAlive: Boolean get() = running && thread?.isAlive == true
+
+        fun setFailAction(action: () -> Unit) {
+            failAction.set(action)
+        }
+
+        fun clearFailAction() {
+            failAction.set(null)
+        }
+
+        fun clearFailure() {
+            failure.set(null)
+        }
+
+        fun recordFailure(routeState: String, reason: String) {
+            failure.compareAndSet(null, SessionFailure(routeState, reason))
+        }
+
+        fun failClosed(routeState: String, reason: String) {
+            recordFailure(routeState, reason)
+            runCatching { failAction.getAndSet(null)?.invoke() }
+        }
+
+        fun failure(): SessionFailure? = failure.get()
 
         fun stop() {
             running = false
-            connected = false
+            runCatching { failAction.getAndSet(null)?.invoke() }
             runCatching { server?.close() }
             if (Thread.currentThread() != thread) thread?.join(1500)
         }
@@ -1170,22 +1573,3 @@ object AndroidUsbAudioBridge {
         }
     }
 }
-
-data class UsbAudioDevice(
-    val id: Int,
-    val direction: String,
-    val kind: String,
-    val type: Int,
-    val name: String,
-    val sampleRates: List<Int>,
-    val channelCounts: List<Int>,
-    val socketPath: String,
-    val connected: Boolean = false,
-)
-
-data class UsbAudioStatus(
-    val state: String = "stopped",
-    val inputDevices: List<UsbAudioDevice> = emptyList(),
-    val outputDevices: List<UsbAudioDevice> = emptyList(),
-    val error: String? = null,
-)

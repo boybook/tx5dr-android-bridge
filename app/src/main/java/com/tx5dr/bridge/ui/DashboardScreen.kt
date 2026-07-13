@@ -60,6 +60,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -108,8 +109,9 @@ import com.tx5dr.bridge.ExternalDataStatus
 import com.tx5dr.bridge.R
 import com.tx5dr.bridge.ReleasePreview
 import com.tx5dr.bridge.RuntimeState
-import com.tx5dr.bridge.UsbAudioDevice
-import com.tx5dr.bridge.UsbAudioStatus
+import com.tx5dr.bridge.AndroidAudioEndpoint
+import com.tx5dr.bridge.AndroidAudioStatus
+import com.tx5dr.bridge.AudioRouteState
 import com.tx5dr.bridge.UsbSerialStatus
 
 private enum class RuntimeLogTab {
@@ -118,11 +120,17 @@ private enum class RuntimeLogTab {
     Bridge,
 }
 
+private enum class AudioHintTone {
+    Info,
+    Warning,
+    Error,
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     bridgeStatus: BridgeStatus,
-    usbAudioStatus: UsbAudioStatus,
+    usbAudioStatus: AndroidAudioStatus,
     usbSerialStatus: UsbSerialStatus,
     logs: String,
     lanUrls: List<String>,
@@ -332,7 +340,7 @@ private fun AtmosphereBox(modifier: Modifier = Modifier, content: @Composable ()
 @Composable
 private fun DashboardContent(
     bridgeStatus: BridgeStatus,
-    usbAudioStatus: UsbAudioStatus,
+    usbAudioStatus: AndroidAudioStatus,
     usbSerialStatus: UsbSerialStatus,
     lanUrls: List<String>,
     adminToken: String?,
@@ -729,7 +737,7 @@ private fun maskAdminToken(token: String): String {
 
 @Composable
 private fun HardwareDock(
-    audioStatus: UsbAudioStatus,
+    audioStatus: AndroidAudioStatus,
     serialStatus: UsbSerialStatus,
     keepAliveEnabled: Boolean,
     onAudioClick: () -> Unit,
@@ -1125,16 +1133,11 @@ private fun SettingsSheet(
 @Composable
 private fun AudioBufferSettingsCard(selectedMs: Int, onSelect: (Int) -> Unit) {
     SettingsGroup {
-        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 stringResource(R.string.audio_buffer_target_title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                stringResource(R.string.audio_buffer_target_subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1146,6 +1149,16 @@ private fun AudioBufferSettingsCard(selectedMs: Int, onSelect: (Int) -> Unit) {
                 AudioBufferChip(30, stringResource(R.string.audio_buffer_target_aggressive), selectedMs, onSelect)
                 AudioBufferChip(20, stringResource(R.string.audio_buffer_target_extreme), selectedMs, onSelect)
                 AudioBufferChip(10, stringResource(R.string.audio_buffer_target_experimental), selectedMs, onSelect)
+            }
+            if (selectedMs < 60) {
+                Text(
+                    stringResource(
+                        if (selectedMs <= 20) R.string.audio_buffer_extreme_hint
+                        else R.string.audio_buffer_low_hint
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
             }
         }
     }
@@ -1315,7 +1328,7 @@ private fun SettingsAction(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AudioDetailSheet(
-    status: UsbAudioStatus,
+    status: AndroidAudioStatus,
     audioBufferTargetMs: Int,
     onDismiss: () -> Unit,
     onAuthorizeAudio: () -> Unit,
@@ -1324,45 +1337,91 @@ private fun AudioDetailSheet(
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         val sheetScrollState = rememberScrollState()
+        val devices = status.inputDevices + status.outputDevices
+        val availableDevices = devices.filter { it.available }
+        val showSelectionHint = status.state == "streaming" &&
+            availableDevices.isNotEmpty() &&
+            availableDevices.all { it.routeState == AudioRouteState.IDLE } &&
+            status.error == null
         Column(
             Modifier
                 .fillMaxWidth()
                 .verticalScroll(sheetScrollState)
                 .padding(horizontal = 24.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.audio_route),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StateChip(status.state)
+                }
                 Text(
-                    stringResource(R.string.audio_route),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
+                    audioRouteSummary(status),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                StateChip(status.state)
+                if (showSelectionHint) {
+                    Text(
+                        stringResource(R.string.audio_devices_available_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            Text(
-                stringResource(R.string.audio_devices_available_hint),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            AudioDeviceListSection(
+                title = stringResource(R.string.input_devices),
+                emptyText = stringResource(R.string.no_input_devices_detected),
+                devices = status.inputDevices,
+                isInput = true,
+                permissionGranted = status.recordPermissionGranted,
+                permissionDenied = status.state == "permission-denied",
+                onAuthorizeAudio = onAuthorizeAudio,
             )
+            AudioDeviceListSection(
+                title = stringResource(R.string.output_devices),
+                emptyText = stringResource(R.string.no_output_devices_detected),
+                devices = status.outputDevices,
+                isInput = false,
+                permissionGranted = true,
+                permissionDenied = false,
+                onAuthorizeAudio = onAuthorizeAudio,
+            )
+            val hasRouteFailure = devices.any {
+                it.routeState == AudioRouteState.LOST || it.routeState == AudioRouteState.FAILED
+            }
+            if (status.state == "error" || hasRouteFailure) {
+                AudioInlineHint(
+                    text = stringResource(R.string.audio_runtime_error_hint),
+                    tone = AudioHintTone.Error,
+                    actionLabel = stringResource(R.string.related_logs),
+                    onAction = onShowDiagnostics,
+                )
+            }
             AudioBufferSettingsCard(
                 selectedMs = audioBufferTargetMs,
                 onSelect = onAudioBufferTargetChange,
             )
-            AudioDeviceListSection(
-                title = stringResource(R.string.audio_input_devices),
-                emptyText = stringResource(R.string.no_input_devices_detected),
-                devices = status.inputDevices,
-            )
-            AudioDeviceListSection(
-                title = stringResource(R.string.audio_output_devices),
-                emptyText = stringResource(R.string.no_output_devices_detected),
-                devices = status.outputDevices,
-            )
-            status.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onAuthorizeAudio) { Text(if (status.state == "streaming") stringResource(R.string.audio_reconnect) else stringResource(R.string.authorize_start)) }
-                OutlinedButton(onClick = onShowDiagnostics) { Text(stringResource(R.string.related_logs)) }
+            if (
+                status.recordPermissionGranted &&
+                availableDevices.isNotEmpty() &&
+                status.state != "starting"
+            ) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = onAuthorizeAudio) {
+                        Text(
+                            when (status.state) {
+                                "streaming" -> stringResource(R.string.audio_reconnect)
+                                "error" -> stringResource(R.string.action_retry)
+                                else -> stringResource(R.string.action_start)
+                            }
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -1373,22 +1432,73 @@ private fun AudioDetailSheet(
 private fun AudioDeviceListSection(
     title: String,
     emptyText: String,
-    devices: List<UsbAudioDevice>,
+    devices: List<AndroidAudioEndpoint>,
+    isInput: Boolean,
+    permissionGranted: Boolean,
+    permissionDenied: Boolean,
+    onAuthorizeAudio: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        if (isInput && !permissionGranted) {
+            AudioInlineHint(
+                text = stringResource(R.string.mic_permission_required),
+                tone = AudioHintTone.Info,
+                actionLabel = stringResource(
+                    if (permissionDenied) R.string.action_go_allow else R.string.action_allow
+                ),
+                onAction = onAuthorizeAudio,
+            )
+        }
+        val groupedDevices = devices.groupBy { it.transport }
         if (devices.isEmpty()) {
             Text(emptyText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
-                shape = MaterialTheme.shapes.large,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.fillMaxWidth()) {
-                    devices.forEachIndexed { index, device ->
-                        AudioDeviceRow(device)
-                        if (index != devices.lastIndex) HorizontalDivider()
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val knownTransports = listOf("usb", "analog", "builtin")
+                val transports = knownTransports + groupedDevices.keys
+                    .filterNot { it in knownTransports }
+                    .sorted()
+                transports.forEach { transport ->
+                    val transportDevices = groupedDevices[transport].orEmpty()
+                    if (transportDevices.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                audioTransportLabel(transport),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+                                shape = MaterialTheme.shapes.large,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    transportDevices.forEachIndexed { index, device ->
+                                        AudioDeviceRow(device)
+                                        if (index != transportDevices.lastIndex) HorizontalDivider()
+                                    }
+                                }
+                            }
+                            val showAnalogHint = transport == "analog" && if (isInput) {
+                                transportDevices.any {
+                                    it.available && it.kind == AudioRoute.WIRED_HEADSET
+                                }
+                            } else {
+                                transportDevices.any {
+                                    it.routeState == AudioRouteState.OPENING || it.routeState == AudioRouteState.VERIFIED
+                                }
+                            }
+                            if (showAnalogHint) {
+                                AudioInlineHint(
+                                    text = stringResource(
+                                        if (isInput) R.string.analog_headset_level_warning
+                                        else R.string.analog_output_interference_warning
+                                    ),
+                                    tone = AudioHintTone.Warning,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1397,27 +1507,87 @@ private fun AudioDeviceListSection(
 }
 
 @Composable
-private fun AudioDeviceRow(device: UsbAudioDevice) {
+private fun AudioDeviceRow(device: AndroidAudioEndpoint) {
     ListItem(
         headlineContent = { Text(displayAudioDeviceName(device), maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
-            Text(
-                stringResource(R.string.audio_device_socket_format, device.socketPath),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    audioEndpointStatusLabel(device),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when (device.routeState) {
+                        AudioRouteState.LOST, AudioRouteState.FAILED -> MaterialTheme.colorScheme.error
+                        AudioRouteState.VERIFIED -> Color(0xFF2E7D32)
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         },
         trailingContent = {
-            Icon(
-                Icons.Filled.CheckCircle,
-                contentDescription = stringResource(
-                    if (device.connected) R.string.cd_audio_device_connected else R.string.cd_audio_device_ready
-                ),
-                tint = if (device.connected) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+            if (device.routeState == AudioRouteState.OPENING) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Icon(
+                    when (device.routeState) {
+                        AudioRouteState.VERIFIED -> Icons.Filled.CheckCircle
+                        AudioRouteState.LOST, AudioRouteState.UNAVAILABLE, AudioRouteState.FAILED -> Icons.Filled.Error
+                        else -> Icons.Filled.Info
+                    },
+                    contentDescription = audioEndpointStatusLabel(device),
+                    tint = when (device.routeState) {
+                        AudioRouteState.VERIFIED -> Color(0xFF2E7D32)
+                        AudioRouteState.LOST, AudioRouteState.FAILED -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         },
     )
+}
+
+@Composable
+private fun AudioInlineHint(
+    text: String,
+    tone: AudioHintTone,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    val containerColor = when (tone) {
+        AudioHintTone.Info -> MaterialTheme.colorScheme.secondaryContainer
+        AudioHintTone.Warning -> MaterialTheme.colorScheme.tertiaryContainer
+        AudioHintTone.Error -> MaterialTheme.colorScheme.errorContainer
+    }
+    val contentColor = when (tone) {
+        AudioHintTone.Info -> MaterialTheme.colorScheme.onSecondaryContainer
+        AudioHintTone.Warning -> MaterialTheme.colorScheme.onTertiaryContainer
+        AudioHintTone.Error -> MaterialTheme.colorScheme.onErrorContainer
+    }
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                if (tone == AudioHintTone.Error) Icons.Filled.Error else Icons.Filled.Info,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            if (actionLabel != null && onAction != null) {
+                TextButton(onClick = onAction) { Text(actionLabel) }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1525,18 +1695,44 @@ private fun DeviceList(title: String, values: List<String>) {
 }
 
 @Composable
-private fun audioRouteSummary(status: UsbAudioStatus): String {
-    return stringResource(R.string.audio_device_count_summary, status.inputDevices.size, status.outputDevices.size)
+private fun audioRouteSummary(status: AndroidAudioStatus): String {
+    return stringResource(
+        R.string.audio_device_count_summary,
+        status.inputDevices.count { it.available },
+        status.outputDevices.count { it.available },
+    )
 }
 
 @Composable
-private fun displayAudioDeviceName(device: UsbAudioDevice?): String {
+private fun displayAudioDeviceName(device: AndroidAudioEndpoint?): String {
     if (device == null) return stringResource(R.string.no_device_detected)
     return when (device.kind) {
         AudioRoute.BUILTIN_MIC -> stringResource(R.string.phone_microphone)
         AudioRoute.BUILTIN_SPEAKER -> stringResource(R.string.phone_speaker)
+        AudioRoute.WIRED_HEADSET -> stringResource(R.string.wired_headset)
+        AudioRoute.WIRED_HEADPHONES -> stringResource(R.string.wired_headphones)
+        AudioRoute.ANALOG_LINE -> stringResource(R.string.analog_line_audio)
         else -> device.name
     }
+}
+
+@Composable
+private fun audioTransportLabel(transport: String): String = when (transport) {
+    "usb" -> stringResource(R.string.audio_group_usb)
+    "analog" -> stringResource(R.string.audio_group_analog)
+    "builtin" -> stringResource(R.string.audio_group_builtin)
+    else -> transport
+}
+
+@Composable
+private fun audioEndpointStatusLabel(device: AndroidAudioEndpoint): String = when (device.routeState) {
+    AudioRouteState.IDLE -> stringResource(R.string.audio_endpoint_detected)
+    AudioRouteState.OPENING -> stringResource(R.string.audio_endpoint_client_connected)
+    AudioRouteState.VERIFIED -> stringResource(R.string.audio_endpoint_route_verified)
+    AudioRouteState.LOST -> stringResource(R.string.audio_endpoint_route_lost)
+    AudioRouteState.UNAVAILABLE -> stringResource(R.string.audio_endpoint_unavailable)
+    AudioRouteState.FAILED -> stringResource(R.string.audio_endpoint_failed)
+    else -> device.routeState
 }
 
 @Composable
@@ -1558,7 +1754,7 @@ private fun hasRuntimeUpdate(status: BridgeStatus, preview: ReleasePreview?): Bo
     return installed.isNotEmpty() && latest.isNotEmpty() && installed != latest
 }
 
-private fun UsbAudioStatus.needsRecordAudioPermission(): Boolean =
+private fun AndroidAudioStatus.needsRecordAudioPermission(): Boolean =
     state == "permission-required" || state == "permission-denied"
 
 private enum class DetailSheet { Audio, Serial }

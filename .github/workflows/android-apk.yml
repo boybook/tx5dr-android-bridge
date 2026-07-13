@@ -204,6 +204,9 @@ jobs:
           echo "display_timestamp=$display_ts" >> "$GITHUB_OUTPUT"
           echo "commit_title=$commit_title" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Android code
+        run: ./gradlew testDebugUnitTest
+
       - name: Build signed release APK
         run: ./gradlew assembleRelease
 

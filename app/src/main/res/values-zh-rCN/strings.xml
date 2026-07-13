@@ -91,10 +91,25 @@
     <string name="mic_permission_required">需要允许麦克风权限</string>
     <string name="phone_microphone">手机麦克风</string>
     <string name="phone_speaker">手机扬声器</string>
+    <string name="wired_headset">有线耳麦</string>
+    <string name="wired_headphones">有线耳机</string>
+    <string name="analog_line_audio">模拟线路音频</string>
+    <string name="audio_group_usb">USB</string>
+    <string name="audio_group_analog">3.5 mm</string>
+    <string name="audio_group_builtin">内置设备</string>
     <string name="audio_input_devices">输入设备</string>
     <string name="audio_output_devices">输出设备</string>
-    <string name="audio_device_count_summary">%1$d 个输入 · %2$d 个输出可用</string>
-    <string name="audio_devices_available_hint">以下设备都可用于 TX-5DR。实际电台输入/输出请在 TX-5DR 的音频设置中选择。</string>
+    <string name="audio_device_count_summary">%1$d 输入 · %2$d 输出</string>
+    <string name="audio_devices_available_hint">请在 TX-5DR 中选择输入和输出。</string>
+    <string name="analog_headset_level_warning">耳麦口不是线路输入；接电台前请使用合适的转接、衰减和隔离。</string>
+    <string name="analog_output_interference_warning">发射前请开启勿扰，避免系统提示音进入电台。</string>
+    <string name="audio_runtime_error_hint">音频已停止，请检查连接后重试。</string>
+    <string name="audio_endpoint_detected">可用</string>
+    <string name="audio_endpoint_client_connected">正在验证</string>
+    <string name="audio_endpoint_route_verified">使用中</string>
+    <string name="audio_endpoint_route_lost">路由中断</string>
+    <string name="audio_endpoint_unavailable">已拔出</string>
+    <string name="audio_endpoint_failed">路由失败</string>
     <string name="audio_device_socket_format">Socket：%1$s</string>
     <string name="cd_audio_device_connected">TX-5DR 已连接此音频设备</string>
     <string name="cd_audio_device_ready">音频设备已就绪</string>
@@ -151,6 +166,8 @@
     <string name="auto_enter_tx5dr_subtitle">关闭后停留在状态页。</string>
     <string name="audio_buffer_target_title">音频缓冲</string>
     <string name="audio_buffer_target_subtitle">数值越低延迟越小，但部分设备可能出现 underrun；修改后会重连音频桥。</string>
+    <string name="audio_buffer_low_hint">低缓冲可能导致卡顿。</string>
+    <string name="audio_buffer_extreme_hint">仅建议调试时使用。</string>
     <string name="audio_buffer_target_compatible">兼容</string>
     <string name="audio_buffer_target_standard">标准</string>
     <string name="audio_buffer_target_low_latency">低延迟</string>
@@ -177,6 +194,7 @@
     <string name="no_device_detected">未检测到</string>
 
     <string name="bridge_state_connected">已连接</string>
+    <string name="bridge_state_output_only">仅输出</string>
     <string name="bridge_state_permission_required">需要授权</string>
     <string name="bridge_state_permission_denied">权限被拒绝</string>
     <string name="bridge_state_no_device">未检测到</string>

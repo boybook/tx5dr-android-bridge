@@ -91,10 +91,25 @@
     <string name="mic_permission_required">Microphone permission required</string>
     <string name="phone_microphone">Phone microphone</string>
     <string name="phone_speaker">Phone speaker</string>
+    <string name="wired_headset">Wired headset</string>
+    <string name="wired_headphones">Wired headphones</string>
+    <string name="analog_line_audio">Analog line audio</string>
+    <string name="audio_group_usb">USB</string>
+    <string name="audio_group_analog">3.5 mm</string>
+    <string name="audio_group_builtin">Built-in</string>
     <string name="audio_input_devices">Input devices</string>
     <string name="audio_output_devices">Output devices</string>
-    <string name="audio_device_count_summary">%1$d inputs · %2$d outputs ready</string>
-    <string name="audio_devices_available_hint">All listed devices are available to TX-5DR. Choose the actual radio input and output inside the TX-5DR audio settings.</string>
+    <string name="audio_device_count_summary">%1$d inputs · %2$d outputs</string>
+    <string name="audio_devices_available_hint">Choose the input and output in TX-5DR.</string>
+    <string name="analog_headset_level_warning">A headset mic is not line-in; use suitable adaptation, attenuation, and isolation.</string>
+    <string name="analog_output_interference_warning">Enable Do Not Disturb before transmitting to keep system sounds off the radio.</string>
+    <string name="audio_runtime_error_hint">Audio stopped. Check the connection and try again.</string>
+    <string name="audio_endpoint_detected">Available</string>
+    <string name="audio_endpoint_client_connected">Verifying</string>
+    <string name="audio_endpoint_route_verified">In use</string>
+    <string name="audio_endpoint_route_lost">Route interrupted</string>
+    <string name="audio_endpoint_unavailable">Unplugged</string>
+    <string name="audio_endpoint_failed">Route failed</string>
     <string name="audio_device_socket_format">Socket: %1$s</string>
     <string name="cd_audio_device_connected">TX-5DR is connected to this audio device</string>
     <string name="cd_audio_device_ready">Audio device ready</string>
@@ -151,6 +166,8 @@
     <string name="auto_enter_tx5dr_subtitle">When off, stay on the status page.</string>
     <string name="audio_buffer_target_title">Audio buffer</string>
     <string name="audio_buffer_target_subtitle">Lower values reduce delay but may underrun on some devices. Audio bridge reconnects after changes.</string>
+    <string name="audio_buffer_low_hint">Low buffering may cause dropouts.</string>
+    <string name="audio_buffer_extreme_hint">Recommended for testing only.</string>
     <string name="audio_buffer_target_compatible">Compatible</string>
     <string name="audio_buffer_target_standard">Standard</string>
     <string name="audio_buffer_target_low_latency">Low latency</string>
@@ -177,6 +194,7 @@
     <string name="no_device_detected">No device detected</string>
 
     <string name="bridge_state_connected">Connected</string>
+    <string name="bridge_state_output_only">Output only</string>
     <string name="bridge_state_permission_required">Permission required</string>
     <string name="bridge_state_permission_denied">Permission denied</string>
     <string name="bridge_state_no_device">No device</string>

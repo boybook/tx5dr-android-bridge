@@ -91,10 +91,25 @@
     <string name="mic_permission_required">マイク権限が必要です</string>
     <string name="phone_microphone">スマートフォンのマイク</string>
     <string name="phone_speaker">スマートフォンのスピーカー</string>
+    <string name="wired_headset">有線ヘッドセット</string>
+    <string name="wired_headphones">有線ヘッドホン</string>
+    <string name="analog_line_audio">アナログライン音声</string>
+    <string name="audio_group_usb">USB</string>
+    <string name="audio_group_analog">3.5 mm</string>
+    <string name="audio_group_builtin">内蔵</string>
     <string name="audio_input_devices">入力デバイス</string>
     <string name="audio_output_devices">出力デバイス</string>
-    <string name="audio_device_count_summary">%1$d 入力 · %2$d 出力が利用可能</string>
-    <string name="audio_devices_available_hint">一覧のデバイスはすべて TX-5DR で利用できます。実際に使う入力と出力は TX-5DR のオーディオ設定で選択してください。</string>
+    <string name="audio_device_count_summary">入力 %1$d · 出力 %2$d</string>
+    <string name="audio_devices_available_hint">使用する入力と出力は TX-5DR で選択します。</string>
+    <string name="analog_headset_level_warning">ヘッドセットのマイク端子はライン入力ではありません。適切な変換・減衰・絶縁を使用してください。</string>
+    <string name="analog_output_interference_warning">送信前におやすみモードを有効にし、システム音の混入を防いでください。</string>
+    <string name="audio_runtime_error_hint">音声を停止しました。接続を確認して再試行してください。</string>
+    <string name="audio_endpoint_detected">利用可能</string>
+    <string name="audio_endpoint_client_connected">確認中</string>
+    <string name="audio_endpoint_route_verified">使用中</string>
+    <string name="audio_endpoint_route_lost">ルート切断</string>
+    <string name="audio_endpoint_unavailable">取り外し済み</string>
+    <string name="audio_endpoint_failed">ルート失敗</string>
     <string name="audio_device_socket_format">Socket: %1$s</string>
     <string name="cd_audio_device_connected">TX-5DR がこのオーディオデバイスに接続中</string>
     <string name="cd_audio_device_ready">オーディオデバイス準備完了</string>
@@ -151,6 +166,8 @@
     <string name="auto_enter_tx5dr_subtitle">オフの場合はステータス画面に留まります。</string>
     <string name="audio_buffer_target_title">オーディオバッファ</string>
     <string name="audio_buffer_target_subtitle">値を下げると遅延は減りますが、一部の端末では underrun が起きる場合があります。変更後にオーディオブリッジを再接続します。</string>
+    <string name="audio_buffer_low_hint">低バッファでは音切れする場合があります。</string>
+    <string name="audio_buffer_extreme_hint">テスト時のみ推奨します。</string>
     <string name="audio_buffer_target_compatible">互換</string>
     <string name="audio_buffer_target_standard">標準</string>
     <string name="audio_buffer_target_low_latency">低遅延</string>
@@ -177,6 +194,7 @@
     <string name="no_device_detected">検出されません</string>
 
     <string name="bridge_state_connected">接続済み</string>
+    <string name="bridge_state_output_only">出力のみ</string>
     <string name="bridge_state_permission_required">権限が必要</string>
     <string name="bridge_state_permission_denied">権限が拒否されました</string>
     <string name="bridge_state_no_device">未検出</string>

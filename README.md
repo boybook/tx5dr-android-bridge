@@ -67,8 +67,10 @@ Android app (Kotlin + Compose Material 3)
     - hotspot/LAN IPv4 discovery
     - PRoot resolv.conf generation from Android DNS
     - runtime/android-network-access.json for Node services
-  AndroidUsbAudioBridge
+  AndroidAudioBridge
     - Android AudioRecord/AudioTrack Unix socket endpoints
+    - USB, 3.5 mm wired, analog line, and built-in endpoint classification
+    - requested-route verification with fail-closed hotplug handling
     - latest-frame PCM queues to avoid accumulated latency
     - Unix socket PCM streams under runtime/tx5dr-data/runtime/sockets/
     - runtime/android-audio-devices.json for TX-5DR device enumeration
@@ -256,22 +258,32 @@ Tx5drBridge RuntimeManager AudioBridge UsbSerialBridge proot serial-pty NetworkA
 
 ## Audio Bridge
 
-TX-5DR inside Linux reads an Android audio manifest and opens a Unix domain socket for the selected input/output device. Android exposes multiple USB audio devices plus the built-in microphone/speaker as explicit TX-5DR devices.
+TX-5DR inside Linux reads an Android audio manifest and opens a Unix domain socket for the selected input/output device. Android exposes supported USB, 3.5 mm wired headset/headphone, analog line, and built-in microphone/speaker endpoints as explicit TX-5DR devices. Direction is capability-driven: a device is an input only when Android reports `isSource`, and an output only when it reports `isSink`. A TRS headphone endpoint therefore never appears as an input.
 
 ```text
 Android AudioRecord PCM s16le/mono/48000 preferred
   -> latest-frame input queue
-  -> /opt/tx5dr-data/runtime/sockets/audio-input-<id>.sock
+  -> /opt/tx5dr-data/runtime/sockets/ai-<stable-hash>.sock
   -> TX-5DR server Android audio backend
   -> decoder/spectrum pipeline
 
 TX-5DR server Android audio backend
-  -> /opt/tx5dr-data/runtime/sockets/audio-output-<id>.sock
+  -> /opt/tx5dr-data/runtime/sockets/ao-<stable-hash>.sock
   -> latest-frame output queue
   -> Android AudioTrack preferred output device
 ```
 
-The manifest marks a USB-first default only for unconfigured or legacy profiles. Normal device selection happens inside the TX-5DR web audio settings; the Android shell only exposes device endpoints and shows whether a socket is currently in use. `AudioRecord` / `AudioTrack` are created lazily when TX-5DR connects to a socket, so idle devices do not hold Android audio resources. Latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
+The manifest marks a USB-first default only for unconfigured or legacy profiles. Normal device selection happens inside the TX-5DR web audio settings; the Android shell reports detection, TX-5DR client connection, and actual Android route verification separately. Stable `routeKey` values preserve wired/analog selections across Android device-ID changes, while existing USB manifest IDs and socket paths remain compatible. Non-USB endpoints derive a short deterministic socket basename from the route key so the Android application-private filesystem path remains below the Unix-domain `sun_path` limit; the readable route identity stays in the manifest rather than the kernel socket filename.
+
+`AudioRecord` / `AudioTrack` are created lazily when TX-5DR connects to a socket, so idle devices do not hold Android audio resources. A stream is not trusted merely because `setPreferredDevice()` succeeds: the bridge checks its return value, starts the stream, verifies `routedDevice`, and listens for later routing changes. A mismatch, unplug, or `ACTION_AUDIO_BECOMING_NOISY` event closes the affected stream instead of silently falling back to the phone microphone or speaker. Output protocol `TX5DRAO2` additionally receives `TX5DRAK1` only after the physical route is verified; the older `TX5DRAO1` and unframed PCM paths remain supported without the acknowledgement.
+
+Microphone permission gates input sessions only. Output sockets remain available without `RECORD_AUDIO`, and the microphone foreground-service type is enabled only when permission and an input endpoint are both present. Background hotplug refreshes/reconciles an already-running bridge but does not start microphone capture on its own.
+
+For radio audio, Android tries `UNPROCESSED`, then `VOICE_RECOGNITION`, then `DEFAULT` on wired/analog and built-in microphone inputs. The latest-frame queues intentionally drop stale PCM after stalls so TX and voice output do not accumulate multi-second delay.
+
+### 3.5 mm electrical limits
+
+Android can expose only capabilities implemented by the device audio HAL. If a jack is not reported with `isSource=true`, the app cannot force it to become an input through a public API. A consumer CTIA headset microphone contact is mono microphone-level and commonly supplies microphone bias; it is not a line-level input. Connecting a radio line output may require a CTIA adapter, attenuation, DC blocking, and galvanic isolation. Confirm levels and PTT safety on the actual Android device, cable, and radio before unattended operation. The bridge requests transient exclusive audio focus while analog output is active and fails closed if it cannot obtain or later loses focus, but Android can still mix system audio at the physical output; use Do Not Disturb or a dedicated device before transmitting.
 
 After starting the runtime and enabling audio, use the debug helper to inspect the manifest and sockets:
 

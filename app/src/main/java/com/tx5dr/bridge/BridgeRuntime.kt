@@ -44,8 +44,8 @@ object BridgeRuntime {
         paths.ensureDirs()
         RuntimeExternalData.migrateIfNeeded(paths)
         NetworkAccessProvider.startWatching(app, paths.androidNetworkAccessFile, paths.resolvConfFile)
-        AndroidUsbAudioBridge.init(app, paths.androidAudioDevicesFile)
-        AndroidUsbAudioBridge.startWatchingDevices(app)
+        AndroidAudioBridge.init(app, paths.androidAudioDevicesFile)
+        AndroidAudioBridge.startWatchingDevices(app)
         AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
         registerUsbHotplugReceiver()
         updateStatus(detectInitialStatus())
@@ -93,7 +93,7 @@ object BridgeRuntime {
         val target = coerceAudioBufferTargetMs(value)
         setIntPreference(PREF_AUDIO_BUFFER_TARGET_MS, target)
         executor.execute {
-            runCatching { AndroidUsbAudioBridge.restartIfRunning(app) }
+            runCatching { AndroidAudioBridge.restartIfRunning(app) }
                 .onFailure { error -> LogBus.e(TAG, "Audio bridge restart after buffer change failed", error) }
         }
         return target
@@ -301,14 +301,14 @@ object BridgeRuntime {
     }
 
     private fun startBridgesInternal() {
-        AndroidUsbAudioBridge.startIfPermitted(app)
+        AndroidAudioBridge.startIfPermitted(app)
         val serialStarted = AndroidUsbSerialBridge.startAuto(app, paths.androidSerialDevicesFile)
         if (serialStarted) startSerialPtyProcess()
         LogBus.i(TAG, "Bridge bootstrap complete")
     }
 
     private fun stopBridgesInternal() {
-        AndroidUsbAudioBridge.stop()
+        AndroidAudioBridge.stop()
         AndroidUsbSerialBridge.stop()
         stopSerialPtyProcess()
         LogBus.i(TAG, "Bridge stop complete")
@@ -322,9 +322,11 @@ object BridgeRuntime {
                 LogBus.i(TAG, "USB hotplug event: $action")
                 executor.execute {
                     runCatching {
-                        AndroidUsbAudioBridge.refreshDevices(app)
+                        AndroidAudioBridge.refreshDevices(app)
                         AndroidUsbSerialBridge.refreshDevices(app, paths.androidSerialDevicesFile)
-                        if (getPreference(PREF_AUTO_START_BRIDGES, true)) startBridgesInternal()
+                        if (getPreference(PREF_AUTO_START_BRIDGES, true)) {
+                            AndroidUsbSerialBridge.startAuto(app, paths.androidSerialDevicesFile)
+                        }
                         startSerialPtyProcess()
                     }.onFailure { error ->
                         LogBus.e(TAG, "USB hotplug handling failed", error)

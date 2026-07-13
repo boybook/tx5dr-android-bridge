@@ -177,6 +177,7 @@ private fun installProgressSubtitle(progress: InstallProgress?): String {
 @Composable
 internal fun bridgeLabel(state: String): String = when (state) {
     "streaming", "connected" -> stringResource(R.string.bridge_state_connected)
+    "output-only" -> stringResource(R.string.bridge_state_output_only)
     "permission-required" -> stringResource(R.string.bridge_state_permission_required)
     "permission-denied" -> stringResource(R.string.bridge_state_permission_denied)
     "no-device" -> stringResource(R.string.bridge_state_no_device)

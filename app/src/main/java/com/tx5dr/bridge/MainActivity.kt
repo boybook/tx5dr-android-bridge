@@ -54,7 +54,7 @@ import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     private var bridgeStatus by mutableStateOf(BridgeStatus())
-    private var usbAudioStatus by mutableStateOf(UsbAudioStatus())
+    private var usbAudioStatus by mutableStateOf(AndroidAudioStatus())
     private var usbSerialStatus by mutableStateOf(UsbSerialStatus())
     private var logs by mutableStateOf("")
     private var lanUrls by mutableStateOf<List<String>>(emptyList())
@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val logListener: (String) -> Unit = { text -> runOnUiThread { logs = text } }
-    private val usbAudioListener: (UsbAudioStatus) -> Unit = { status ->
+    private val usbAudioListener: (AndroidAudioStatus) -> Unit = { status ->
         runOnUiThread {
             usbAudioStatus = status
             updateVolumeControlStream(status)
@@ -230,9 +230,9 @@ class MainActivity : ComponentActivity() {
         BridgeRuntime.addStatusListener(statusListener)
         LogBus.addListener(logListener)
         NetworkAccessProvider.addListener(networkListener)
-        AndroidUsbAudioBridge.addListener(usbAudioListener)
+        AndroidAudioBridge.addListener(usbAudioListener)
         AndroidUsbSerialBridge.addListener(usbSerialListener)
-        usbAudioStatus = AndroidUsbAudioBridge.refreshDevices(this)
+        usbAudioStatus = AndroidAudioBridge.refreshDevices(this)
         updateVolumeControlStream(usbAudioStatus)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         BridgeService.start(this, BridgeService.ACTION_BOOTSTRAP)
@@ -251,7 +251,7 @@ class MainActivity : ComponentActivity() {
         refreshLanUrls()
         refreshAdminToken()
         refreshExternalDataStatus()
-        usbAudioStatus = AndroidUsbAudioBridge.refreshDevices(this)
+        usbAudioStatus = AndroidAudioBridge.refreshDevices(this)
         updateVolumeControlStream(usbAudioStatus)
         AndroidUsbSerialBridge.refreshDevices(this, BridgeRuntime.paths.androidSerialDevicesFile)
         if (BridgeRuntime.getPreference(BridgeRuntime.PREF_AUTO_START_BRIDGES, true)) {
@@ -277,7 +277,7 @@ class MainActivity : ComponentActivity() {
         BridgeRuntime.removeStatusListener(statusListener)
         LogBus.removeListener(logListener)
         NetworkAccessProvider.removeListener(networkListener)
-        AndroidUsbAudioBridge.removeListener(usbAudioListener)
+        AndroidAudioBridge.removeListener(usbAudioListener)
         AndroidUsbSerialBridge.removeListener(usbSerialListener)
         super.onDestroy()
     }
@@ -315,9 +315,9 @@ class MainActivity : ComponentActivity() {
         loadPreferences()
     }
 
-    private fun updateVolumeControlStream(status: UsbAudioStatus = usbAudioStatus) {
+    private fun updateVolumeControlStream(status: AndroidAudioStatus = usbAudioStatus) {
         val speakerOutputActive = status.outputDevices.any {
-            it.kind == AudioRoute.BUILTIN_SPEAKER && it.connected
+            it.kind == AudioRoute.BUILTIN_SPEAKER && it.clientConnected
         }
         val targetStream = if (speakerOutputActive) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
         if (activeVolumeControlStream == targetStream) return
@@ -1274,7 +1274,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun authorizeAudio() {
-        if (!AndroidUsbAudioBridge.hasRecordPermission(this)) {
+        if (!AndroidAudioBridge.hasRecordPermission(this)) {
             if (Build.VERSION.SDK_INT >= 23 &&
                 usbAudioStatus.state == "permission-denied" &&
                 !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
@@ -1286,7 +1286,7 @@ class MainActivity : ComponentActivity() {
             micWanted = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_RECORD_AUDIO)
         } else {
-            AndroidUsbAudioBridge.start(this)
+            AndroidAudioBridge.start(this)
         }
     }
 
@@ -1311,7 +1311,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        if (AndroidUsbAudioBridge.hasRecordPermission(this)) {
+        if (AndroidAudioBridge.hasRecordPermission(this)) {
             grantWebAudioCapture(request)
             return
         }
@@ -1392,11 +1392,11 @@ class MainActivity : ComponentActivity() {
             pendingWebAudioPermissionRequest = null
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                 pendingWebRequest?.let { grantWebAudioCapture(it) }
-                AndroidUsbAudioBridge.start(this)
+                AndroidAudioBridge.start(this)
             } else {
                 LogBus.w("AudioBridge", "Microphone permission denied")
                 pendingWebRequest?.deny()
-                AndroidUsbAudioBridge.markPermissionDenied()
+                AndroidAudioBridge.markPermissionDenied()
             }
             return
         }
@@ -1408,7 +1408,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 LogBus.w("WebView", "Microphone permission denied for WebView audio capture")
                 pendingWebRequest?.deny()
-                AndroidUsbAudioBridge.markPermissionDenied()
+                AndroidAudioBridge.markPermissionDenied()
             }
         }
     }

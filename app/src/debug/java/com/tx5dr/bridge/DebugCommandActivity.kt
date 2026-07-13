@@ -53,11 +53,11 @@ class DebugCommandActivity : Activity() {
             }
             ACTION_START_MIC -> {
                 LogBus.i(TAG, "Debug USB audio start requested")
-                AndroidUsbAudioBridge.start(this)
+                AndroidAudioBridge.start(this)
             }
             ACTION_STOP_MIC -> {
                 LogBus.i(TAG, "Debug USB audio stop requested")
-                AndroidUsbAudioBridge.stop()
+                AndroidAudioBridge.stop()
             }
             ACTION_START_USB_SERIAL -> {
                 LogBus.i(TAG, "Debug USB serial start requested")

@@ -29,6 +29,17 @@ class AndroidAudioOutputStreamHeaderTest {
     }
 
     @Test
+    fun acceptsV2HeaderWithRouteAcknowledgement() {
+        val bytes = header(sampleRate = 48_000, formatId = 1, channels = 1).also {
+            "TX5DRAO2".encodeToByteArray().copyInto(it, 0)
+        }
+        val result = parseAndroidAudioOutputHeader(bytes)
+
+        assertTrue(result is AndroidAudioOutputHeaderParseResult.Header)
+        assertTrue((result as AndroidAudioOutputHeaderParseResult.Header).header.routeAckRequested)
+    }
+
+    @Test
     fun rejectsInvalidRate() {
         val result = parseAndroidAudioOutputHeader(header(sampleRate = 7_999, formatId = 1, channels = 1))
 
@@ -57,10 +68,19 @@ class AndroidAudioOutputStreamHeaderTest {
     }
 
     @Test
+    fun rejectsUnknownFramedProtocolVersionInsteadOfPlayingItAsPcm() {
+        val bytes = header(sampleRate = 48_000, formatId = 1, channels = 1).also {
+            "TX5DRAO3".encodeToByteArray().copyInto(it, 0)
+        }
+
+        assertTrue(parseAndroidAudioOutputHeader(bytes) is AndroidAudioOutputHeaderParseResult.Invalid)
+    }
+
+    @Test
     fun sizesOutputBuffersByBytesPerSample() {
-        assertEquals(4_410, AndroidUsbAudioBridge.bufferSizeFor(44_100, minBuffer = 128, targetMs = 50, bytesPerSample = 2))
-        assertEquals(8_820, AndroidUsbAudioBridge.bufferSizeFor(44_100, minBuffer = 128, targetMs = 50, bytesPerSample = 4))
-        assertEquals(256, AndroidUsbAudioBridge.bufferSizeFor(44_100, minBuffer = 256, targetMs = 1, bytesPerSample = 2))
+        assertEquals(4_410, AndroidAudioBridge.bufferSizeFor(44_100, minBuffer = 128, targetMs = 50, bytesPerSample = 2))
+        assertEquals(8_820, AndroidAudioBridge.bufferSizeFor(44_100, minBuffer = 128, targetMs = 50, bytesPerSample = 4))
+        assertEquals(256, AndroidAudioBridge.bufferSizeFor(44_100, minBuffer = 256, targetMs = 1, bytesPerSample = 2))
     }
 
     private fun header(sampleRate: Int, formatId: Int, channels: Int): ByteArray {
