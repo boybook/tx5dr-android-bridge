@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     private var serviceOnlyMode by mutableStateOf(false)
     private var keepAliveEnabled by mutableStateOf(false)
     private var audioBufferTargetMs by mutableStateOf(BridgeRuntime.DEFAULT_AUDIO_BUFFER_TARGET_MS)
+    private var webPort by mutableStateOf(BridgeRuntime.DEFAULT_WEB_PORT)
     private var showInstallDialog by mutableStateOf(false)
     private var releasePreview by mutableStateOf<ReleasePreview?>(null)
     private var releasePreviewError by mutableStateOf<String?>(null)
@@ -182,6 +183,7 @@ class MainActivity : ComponentActivity() {
                     autoStartRuntime = autoStartRuntime,
                     autoOpenWebView = autoOpenWebView,
                     audioBufferTargetMs = audioBufferTargetMs,
+                    webPort = webPort,
                     keepAliveEnabled = keepAliveEnabled,
                     showInstallDialog = showInstallDialog,
                     releasePreview = releasePreview,
@@ -218,6 +220,7 @@ class MainActivity : ComponentActivity() {
                     onAutoStartRuntimeChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_START_RUNTIME, it) },
                     onAutoOpenWebViewChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, it) },
                     onAudioBufferTargetChange = { updateAudioBufferTargetMs(it) },
+                    onWebPortChange = { updateWebPort(it) },
                     onServiceOnlyModeChange = { value ->
                         setBooleanPreference(BridgeRuntime.PREF_SERVICE_ONLY_MODE, value)
                         if (value) releaseWebView()
@@ -303,6 +306,7 @@ class MainActivity : ComponentActivity() {
         serviceOnlyMode = BridgeRuntime.getPreference(BridgeRuntime.PREF_SERVICE_ONLY_MODE, false)
         keepAliveEnabled = BridgeRuntime.getPreference(BridgeRuntime.PREF_KEEP_ALIVE_ENABLED, false)
         audioBufferTargetMs = BridgeRuntime.getAudioBufferTargetMs()
+        webPort = BridgeRuntime.getWebPort()
     }
 
     private fun setBooleanPreference(key: String, value: Boolean) {
@@ -338,6 +342,16 @@ class MainActivity : ComponentActivity() {
         adminToken = BridgeRuntime.getAdminToken()
     }
 
+    private fun updateWebPort(value: Int) {
+        val next = BridgeRuntime.setWebPort(value)
+        webPort = next
+        refreshLanUrls()
+        if (bridgeStatus.runtimeState == RuntimeState.Running || bridgeStatus.runtimeState == RuntimeState.Starting) {
+            releaseWebView()
+            BridgeRuntime.restart()
+        }
+    }
+
     private fun refreshExternalDataStatus() {
         externalDataStatus = BridgeRuntime.externalDataStatus()
     }
@@ -369,7 +383,7 @@ class MainActivity : ComponentActivity() {
         webVisible = true
         LogBus.i("Tx5drBridge", "Opening WebView with admin token")
         showNativeWebView(
-            Uri.parse(WEB_URL)
+            Uri.parse("http://127.0.0.1:${BridgeRuntime.getWebPort()}")
                 .buildUpon()
                 .appendQueryParameter("auth_token", token)
                 .build()
@@ -1155,7 +1169,7 @@ class MainActivity : ComponentActivity() {
 
     private fun isAllowedWebUrl(uri: Uri): Boolean {
         if (uri.scheme == "about") return true
-        return uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == WEB_PORT
+        return uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port == BridgeRuntime.getWebPort()
     }
 
     private fun isSystemDarkMode(): Boolean =
@@ -1440,8 +1454,6 @@ class MainActivity : ComponentActivity() {
 
         private const val REQ_RECORD_AUDIO = 1001
         const val REQ_POST_NOTIFICATIONS = 1002
-        private const val WEB_PORT = 8076
-        private const val WEB_URL = "http://127.0.0.1:8076"
         private const val WEB_CHROME_BRIDGE = "Tx5drAndroidChrome"
         private const val WEB_DOWNLOAD_BRIDGE = "Tx5drAndroidDownloads"
         private const val WEB_AUDIO_BRIDGE = "Tx5drAndroidAudioNative"

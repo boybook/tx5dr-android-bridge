@@ -175,6 +175,8 @@
     <string name="audio_buffer_target_extreme">極低遅延</string>
     <string name="audio_buffer_target_experimental">実験的</string>
     <string name="manifest_url">Manifest URL</string>
+    <string name="web_port">外部 Web ポート</string>
+    <string name="web_port_subtitle">LAN 端末はこのポートを使用します。変更するとブリッジが再起動します。</string>
     <string name="refresh_lan">LAN を更新</string>
     <string name="refresh_lan_subtitle">ホットスポットと LAN のアクセスアドレスを更新します。</string>
     <string name="install_update">インストール / 更新</string>

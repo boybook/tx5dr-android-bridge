@@ -113,6 +113,9 @@ object NetworkAccessProvider {
         val root = JSONObject()
             .put("hostname", "android")
             .put("webPort", webPort)
+            // The embedded WebView uses loopback, while client-tools exposes
+            // the same port to LAN peers. Keep the runtime snapshot explicit.
+            .put("listenHost", "0.0.0.0")
             .put("updatedAt", updatedAt)
         val jsonAddresses = JSONArray()
         val visibleCandidates = candidates.distinctBy { it.ip }

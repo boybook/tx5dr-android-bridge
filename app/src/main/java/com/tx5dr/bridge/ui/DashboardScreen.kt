@@ -139,6 +139,7 @@ fun DashboardScreen(
     autoStartRuntime: Boolean,
     autoOpenWebView: Boolean,
     audioBufferTargetMs: Int,
+    webPort: Int,
     keepAliveEnabled: Boolean,
     showInstallDialog: Boolean,
     releasePreview: ReleasePreview?,
@@ -171,6 +172,7 @@ fun DashboardScreen(
     onAutoStartRuntimeChange: (Boolean) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
     onAudioBufferTargetChange: (Int) -> Unit,
+    onWebPortChange: (Int) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
 ) {
     var detailSheet by remember { mutableStateOf<DetailSheet?>(null) }
@@ -275,12 +277,14 @@ fun DashboardScreen(
                     manifestUrl = manifestUrl,
                     autoStartRuntime = autoStartRuntime,
                     autoOpenWebView = autoOpenWebView,
+                    webPort = webPort,
                     notificationPermissionState = notificationPermissionState,
                     externalDataStatus = externalDataStatus,
                     onDismiss = onDismissSettings,
                     onManifestUrlChange = onManifestUrlChange,
                     onAutoStartRuntimeChange = onAutoStartRuntimeChange,
                     onAutoOpenWebViewChange = onAutoOpenWebViewChange,
+                    onWebPortChange = onWebPortChange,
                     onServiceOnlyModeChange = onServiceOnlyModeChange,
                     onOpenBatterySettings = onOpenBatterySettings,
                     onOpenNotificationSettings = onOpenNotificationSettings,
@@ -1035,12 +1039,14 @@ private fun SettingsSheet(
     manifestUrl: String,
     autoStartRuntime: Boolean,
     autoOpenWebView: Boolean,
+    webPort: Int,
     notificationPermissionState: String,
     externalDataStatus: ExternalDataStatus,
     onDismiss: () -> Unit,
     onManifestUrlChange: (String) -> Unit,
     onAutoStartRuntimeChange: (Boolean) -> Unit,
     onAutoOpenWebViewChange: (Boolean) -> Unit,
+    onWebPortChange: (Int) -> Unit,
     onServiceOnlyModeChange: (Boolean) -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
@@ -1079,6 +1085,14 @@ private fun SettingsSheet(
                 status = externalDataStatus,
                 onCopyText = onCopyText,
                 onOpenDataDirectory = onOpenDataDirectory,
+            )
+            OutlinedTextField(
+                value = webPort.toString(),
+                onValueChange = { value -> value.toIntOrNull()?.let(onWebPortChange) },
+                label = { Text(stringResource(R.string.web_port)) },
+                supportingText = { Text(stringResource(R.string.web_port_subtitle)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
             )
             SettingsGroup(containerColor = MaterialTheme.colorScheme.surface) {
                 SettingsAction(

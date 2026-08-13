@@ -175,6 +175,8 @@
     <string name="audio_buffer_target_extreme">极低</string>
     <string name="audio_buffer_target_experimental">实验</string>
     <string name="manifest_url">Manifest URL</string>
+    <string name="web_port">外部 Web 端口</string>
+    <string name="web_port_subtitle">局域网客户端使用此端口。修改后桥接服务会重启。</string>
     <string name="refresh_lan">刷新 LAN</string>
     <string name="refresh_lan_subtitle">更新热点和局域网访问地址。</string>
     <string name="install_update">安装/更新</string>

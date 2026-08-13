@@ -14,7 +14,7 @@ object RuntimeProcessSupport {
         }
     }
 
-    fun buildRuntimeCommand(baseCommand: List<String>): List<String> {
+    fun buildRuntimeCommand(baseCommand: List<String>, webPort: Int = 8076): List<String> {
         val script = """
 set -e
 mkdir -p /opt/tx5dr-data/config /opt/tx5dr-data/cache /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /opt/tx5dr-user/data /opt/tx5dr-user/logs /opt/tx5dr-user/plugins /opt/tx5dr-user/plugin-data
@@ -62,7 +62,7 @@ cleanup() {
 trap cleanup EXIT TERM INT
 node /opt/tx5dr/current/packages/server/dist/scripts/server-launcher.js /opt/tx5dr/current/packages/server/dist/index.js > >(sed -u 's/^/[server] /') 2>&1 &
 server_pid=$!
-PORT=8076 HOST=0.0.0.0 TARGET=http://127.0.0.1:4000 STATIC_DIR=/opt/tx5dr/current/packages/web/dist TX5DR_PORT_SCAN_STEPS=0 TX5DR_CLIENT_TOOLS_READY_FILE=/opt/tx5dr-data/runtime/client-tools-ready.json TX5DR_CLIENT_TOOLS_LOG_FILE=/opt/tx5dr-user/logs/client-tools.log node packages/client-tools/src/proxy.js > >(sed -u 's/^/[client-tools] /') 2>&1 &
+PORT=$webPort HOST=0.0.0.0 TARGET=http://127.0.0.1:4000 STATIC_DIR=/opt/tx5dr/current/packages/web/dist TX5DR_PORT_SCAN_STEPS=0 TX5DR_CLIENT_TOOLS_READY_FILE=/opt/tx5dr-data/runtime/client-tools-ready.json TX5DR_CLIENT_TOOLS_LOG_FILE=/opt/tx5dr-user/logs/client-tools.log node packages/client-tools/src/proxy.js > >(sed -u 's/^/[client-tools] /') 2>&1 &
 client_pid=$!
 wait -n ${'$'}server_pid ${'$'}client_pid
 exit_code=$?

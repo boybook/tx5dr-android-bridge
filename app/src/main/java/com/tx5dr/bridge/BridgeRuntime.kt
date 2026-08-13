@@ -157,7 +157,15 @@ object BridgeRuntime {
     }
 
     fun refreshNetworkAccess(): NetworkAccessProvider.Snapshot {
-        return NetworkAccessProvider.writeSnapshot(app, paths.androidNetworkAccessFile, paths.resolvConfFile)
+        return NetworkAccessProvider.writeSnapshot(app, paths.androidNetworkAccessFile, paths.resolvConfFile, getWebPort())
+    }
+
+    fun getWebPort(): Int = coerceWebPort(getIntPreference(PREF_WEB_PORT, DEFAULT_WEB_PORT))
+
+    fun setWebPort(value: Int): Int {
+        val port = coerceWebPort(value)
+        setIntPreference(PREF_WEB_PORT, port)
+        return port
     }
 
     fun installOrUpdate() {
@@ -233,7 +241,7 @@ object BridgeRuntime {
                 ensureHostRuntimeEnvironment()
                 RuntimeProcessSupport.resetReadyFiles(paths)
                 updateStatus(status.copy(runtimeState = RuntimeState.Starting, runtimePhase = RuntimePhase.StartingSupervisor, runtimeDetail = "Starting service process", error = null, progress = "Starting service process"))
-                val process = newProotProcess(RuntimeProcessSupport.buildRuntimeCommand(buildProotBaseCommand()))
+                val process = newProotProcess(RuntimeProcessSupport.buildRuntimeCommand(buildProotBaseCommand(), getWebPort()))
                     .directory(paths.workDir)
                     .redirectErrorStream(true)
                     .start()
@@ -298,6 +306,11 @@ object BridgeRuntime {
                 progress = null,
             ))
         }
+    }
+
+    fun restart() {
+        stop()
+        main.postDelayed({ start() }, STOP_TIMEOUT_SECONDS * 1000L + 250L)
     }
 
     private fun startBridgesInternal() {
@@ -606,8 +619,9 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
         Thread {
             while (healthRunning && !stopRequested && prootProcess == process && process.isAlive) {
                 val server = RuntimeProcessSupport.isHealthy("http://127.0.0.1:4000/api/hello")
-                val clientTools = RuntimeProcessSupport.isHealthy("http://127.0.0.1:8076/")
-                val webApi = server && RuntimeProcessSupport.isHealthy("http://127.0.0.1:8076/api/hello")
+                val webPort = getWebPort()
+                val clientTools = RuntimeProcessSupport.isHealthy("http://127.0.0.1:$webPort/")
+                val webApi = server && RuntimeProcessSupport.isHealthy("http://127.0.0.1:$webPort/api/hello")
                 val readyDetail = RuntimeProcessSupport.readyDetail(paths)
                 if (stopRequested || status.runtimeState == RuntimeState.Stopping) break
                 val next = when {
@@ -701,10 +715,14 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
     const val PREF_SERVICE_ONLY_MODE = "serviceOnlyMode"
     const val PREF_KEEP_ALIVE_ENABLED = "keepAliveEnabled"
     const val PREF_AUDIO_BUFFER_TARGET_MS = "audioBufferTargetMs"
+    const val PREF_WEB_PORT = "webPort"
+    const val DEFAULT_WEB_PORT = 8076
     const val DEFAULT_AUDIO_BUFFER_TARGET_MS = 60
 
     fun coerceAudioBufferTargetMs(value: Int): Int = when (value) {
         10, 20, 30, 40, 60, 100 -> value
         else -> DEFAULT_AUDIO_BUFFER_TARGET_MS
     }
+
+    fun coerceWebPort(value: Int): Int = value.takeIf { it in 1024..65535 } ?: DEFAULT_WEB_PORT
 }
