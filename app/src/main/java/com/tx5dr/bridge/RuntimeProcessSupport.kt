@@ -1,6 +1,7 @@
 package com.tx5dr.bridge
 
 import org.json.JSONObject
+import android.net.Uri
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -90,6 +91,52 @@ exit ${'$'}exit_code
         conn.responseCode in 200..399
     } catch (_: Throwable) {
         false
+    }
+
+    fun buildAuthenticatedWebUrl(baseUrl: String, adminToken: String): String {
+        val status = requestJson("$baseUrl/api/auth/status")
+        if (!status.optBoolean("enabled", true)) return baseUrl
+
+        val login = requestJson(
+            "$baseUrl/api/auth/login",
+            JSONObject().put("token", adminToken),
+        )
+        val jwt = login.optString("jwt").takeIf { it.isNotBlank() }
+            ?: error("Admin authentication response is invalid")
+        val code = requestJson(
+            "$baseUrl/api/auth/browser-login-codes",
+            JSONObject(),
+            "Bearer $jwt",
+        ).optString("code").takeIf { it.isNotBlank() }
+            ?: error("Browser login code response is invalid")
+
+        return Uri.parse(baseUrl).buildUpon()
+            .fragment("browser_login_code=${Uri.encode(code)}")
+            .build()
+            .toString()
+    }
+
+    private fun requestJson(url: String, body: JSONObject? = null, authorization: String? = null): JSONObject {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 2_000
+            conn.readTimeout = 5_000
+            conn.setRequestProperty("Accept", "application/json")
+            if (authorization != null) conn.setRequestProperty("Authorization", authorization)
+            if (body != null) {
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            }
+            val status = conn.responseCode
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) error("Authentication request failed (HTTP $status)")
+            return JSONObject(response)
+        } finally {
+            conn.disconnect()
+        }
     }
 
     fun readyDetail(paths: RuntimePaths): String? {

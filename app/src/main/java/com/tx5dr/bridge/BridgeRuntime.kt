@@ -156,6 +156,14 @@ object BridgeRuntime {
         }
     }
 
+    fun buildAuthenticatedWebUrl(baseUrl: String, adminToken: String, callback: (String?, String?) -> Unit) {
+        executor.execute {
+            runCatching { RuntimeProcessSupport.buildAuthenticatedWebUrl(baseUrl, adminToken) }
+                .onSuccess { url -> main.post { callback(url, null) } }
+                .onFailure { error -> main.post { callback(null, error.message ?: error.javaClass.simpleName) } }
+        }
+    }
+
     fun refreshNetworkAccess(): NetworkAccessProvider.Snapshot {
         return NetworkAccessProvider.writeSnapshot(app, paths.androidNetworkAccessFile, paths.resolvConfFile, getWebPort())
     }

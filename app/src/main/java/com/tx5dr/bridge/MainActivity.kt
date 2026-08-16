@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
     private var webRetryCount = 0
     private var webLoadStartedAtMs = 0L
     private var lastWebViewUrl: String? = null
+    private var browserLoginPending = false
     private val webDownloadLock = Any()
     private var activeWebDownload: PendingWebDownload? = null
     private var pendingWebDownloadSave: PendingWebDownload? = null
@@ -373,22 +374,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openWebView() {
+        if (browserLoginPending) return
         refreshAdminToken()
         val token = adminToken
         if (token == null) {
             LogBus.w("Tx5drBridge", "Admin token not found; wait until TX-5DR server is ready before opening WebView")
             return
         }
-        webSuppressedForSession = false
-        webVisible = true
-        LogBus.i("Tx5drBridge", "Opening WebView with admin token")
-        showNativeWebView(
-            Uri.parse("http://127.0.0.1:${BridgeRuntime.getWebPort()}")
-                .buildUpon()
-                .appendQueryParameter("auth_token", token)
-                .build()
-                .toString()
-        )
+        browserLoginPending = true
+        val baseUrl = "http://127.0.0.1:${BridgeRuntime.getWebPort()}"
+        BridgeRuntime.buildAuthenticatedWebUrl(baseUrl, token) { url, error ->
+            browserLoginPending = false
+            if (url == null) {
+                LogBus.w("Tx5drBridge", "Unable to authorize WebView: ${error ?: "unknown error"}")
+                return@buildAuthenticatedWebUrl
+            }
+            webSuppressedForSession = false
+            webVisible = true
+            LogBus.i("Tx5drBridge", "Opening WebView with one-time browser authorization")
+            showNativeWebView(url)
+        }
     }
 
     private fun releaseWebView() {
