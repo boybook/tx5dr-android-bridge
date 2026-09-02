@@ -551,7 +551,7 @@ object AndroidAudioBridge {
         setAudioThreadPriority("output-${device.id}")
         try {
             val targetMs = bufferTargetMs()
-            val attrs = outputAudioAttributes(bridgeDevice)
+            val attrs = outputAudioAttributes()
             AndroidUnixSocketServer(androidSocketFile(bridgeDevice.socketPath)).use { server ->
                 session.server = server
                 LogBus.i(TAG, "Audio output available on ${bridgeDevice.socketPath} device=${device.describe()} legacyRate=${choosePlaybackRate(device)} target=${targetMs}ms")
@@ -1014,15 +1014,12 @@ object AndroidAudioBridge {
         return sampleRates.firstOrNull { it in rates } ?: rates.first()
     }
 
-    private fun outputAudioAttributes(device: AndroidAudioEndpoint): AudioAttributes {
-        val (usage, contentType) = if (device.kind == AudioRoute.BUILTIN_SPEAKER) {
-            AudioAttributes.USAGE_VOICE_COMMUNICATION to AudioAttributes.CONTENT_TYPE_SPEECH
-        } else {
-            AudioAttributes.USAGE_MEDIA to AudioAttributes.CONTENT_TYPE_MUSIC
-        }
+    private fun outputAudioAttributes(): AudioAttributes {
         return AudioAttributes.Builder()
-            .setUsage(usage)
-            .setContentType(contentType)
+            // Radio monitor audio is playback, not a phone/VoIP communication stream.
+            // Communication usage lets the platform route to the earpiece on some OEMs.
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
     }
 
