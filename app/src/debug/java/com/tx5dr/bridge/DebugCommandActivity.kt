@@ -23,6 +23,10 @@ class DebugCommandActivity : Activity() {
                 LogBus.i(TAG, "Debug bootstrap requested")
                 BridgeService.start(this, BridgeService.ACTION_BOOTSTRAP)
             }
+            ACTION_PREPARE_BASE -> {
+                LogBus.i(TAG, "Debug base runtime preparation requested")
+                BridgeService.start(this, BridgeService.ACTION_PREPARE_BASE)
+            }
             ACTION_INSTALL -> {
                 LogBus.i(TAG, "Debug install/update requested")
                 BridgeService.start(this, BridgeService.ACTION_INSTALL)
@@ -80,6 +84,7 @@ class DebugCommandActivity : Activity() {
         private const val TAG = "Tx5drBridge"
         const val EXTRA_MANIFEST_URL = "manifest_url"
         const val ACTION_BOOTSTRAP = "com.tx5dr.bridge.debug.BOOTSTRAP"
+        const val ACTION_PREPARE_BASE = "com.tx5dr.bridge.debug.PREPARE_BASE"
         const val ACTION_INSTALL = "com.tx5dr.bridge.debug.INSTALL"
         const val ACTION_START = "com.tx5dr.bridge.debug.START"
         const val ACTION_STOP = "com.tx5dr.bridge.debug.STOP"

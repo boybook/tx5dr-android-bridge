@@ -35,6 +35,7 @@ class BridgeService : Service() {
         LogBus.i("Tx5drBridge", "BridgeService action: ${intent?.action ?: "none"}")
         when (intent?.action) {
             ACTION_BOOTSTRAP -> BridgeRuntime.bootstrap()
+            ACTION_PREPARE_BASE -> BridgeRuntime.prepareBaseRuntime()
             ACTION_START_RUNTIME -> BridgeRuntime.start()
             ACTION_STOP_RUNTIME -> {
                 BridgeRuntime.stop()
@@ -202,6 +203,7 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "tx5dr_bridge"
         private const val NOTIFICATION_ID = 1
         const val ACTION_BOOTSTRAP = "com.tx5dr.bridge.BOOTSTRAP"
+        const val ACTION_PREPARE_BASE = "com.tx5dr.bridge.PREPARE_BASE"
         const val ACTION_START_RUNTIME = "com.tx5dr.bridge.START_RUNTIME"
         const val ACTION_STOP_RUNTIME = "com.tx5dr.bridge.STOP_RUNTIME"
         const val ACTION_INSTALL = "com.tx5dr.bridge.INSTALL"

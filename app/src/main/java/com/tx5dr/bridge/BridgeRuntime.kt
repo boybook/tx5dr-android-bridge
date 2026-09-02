@@ -134,6 +134,26 @@ object BridgeRuntime {
         }
     }
 
+    /** Prepare the embedded Debian/PRoot layer without downloading a TX-5DR release. */
+    fun prepareBaseRuntime() {
+        executor.execute {
+            try {
+                LogBus.i(TAG, "Base runtime preparation started")
+                RuntimeCompatibility.requireSupported(paths.nativeLibDir)
+                RuntimeReleaseManager.ensureBaseRuntime(app, paths, ::logProgress)
+                ensureHostRuntimeEnvironment()
+                updateStatus(detectInitialStatus().copy(
+                    runtimeDetail = "Debian 13 base runtime ready",
+                    error = null,
+                ))
+                LogBus.i(TAG, "Base runtime preparation complete")
+            } catch (error: Throwable) {
+                LogBus.e(TAG, "Base runtime preparation failed", error)
+                updateStatus(status.copy(runtimePhase = RuntimePhase.Error, error = error.message))
+            }
+        }
+    }
+
     fun startBridges() {
         executor.execute { startBridgesInternal() }
     }

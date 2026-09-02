@@ -115,7 +115,7 @@ The Debian/Node side does not enumerate Android network interfaces. Kotlin write
 2. The app downloads the configured runtime manifest, selects the `android` + `arm64` tarball, checks `sha256`, then extracts it to `files/runtime/tx5dr/releases/<version>`.
 3. `files/runtime/tx5dr/current` is switched to the newly installed release. The symlink is relative (`releases/<version>`) so it remains visible after PRoot bind mounts `files/runtime/tx5dr` as `/opt/tx5dr`.
 4. Startup prepares Android-side native host libraries, refreshes LAN/DNS/serial state files, then launches PRoot with bind mounts for `/opt/tx5dr`, `/opt/tx5dr-data`, `/etc/resolv.conf`, `/proc`, `/dev`, and `/sys`.
-5. Inside Debian, the startup script starts PulseAudio, starts the TX-5DR server on loopback, starts `client-tools` on `0.0.0.0:8076`, and keeps the PRoot process alive until either child exits or Android sends stop.
+5. Inside Debian, the startup script starts the TX-5DR server on loopback, starts `client-tools` on `0.0.0.0:8076`, and keeps the PRoot process alive until either child exits or Android sends stop. Audio is bridged through Android-owned Unix sockets.
 6. Android starts the serial PTY helper as a separate supervised PRoot process so it can be debugged and restarted independently.
 7. The Android side periodically health-checks `GET http://127.0.0.1:4000/api/hello` and `GET http://127.0.0.1:8076/`; LAN reachability is shown separately and does not affect local health.
 
@@ -125,6 +125,10 @@ The Android runtime does not use `systemd` or `nginx`. Static web serving and AP
 
 A debug APK can be compiled without large runtime assets, but install/start will fail until the PRoot, zstd, and rootfs assets exist.
 
+The Android Gradle Plugin used by this project requires JDK 17. JDK 25 is not
+supported by the current toolchain; set `JAVA_HOME` to a JDK 17 installation
+before invoking Gradle.
+
 ```bash
 cd /Users/fangyizhou/Documents/coding/tx5dr-android-bridge
 ./tools/fetch-proot.sh
@@ -133,7 +137,17 @@ cd /Users/fangyizhou/Documents/coding/tx5dr-android-bridge
 ./gradlew assembleDebug
 ```
 
-`tools/build-rootfs.sh` requires Docker with `linux/arm64` support. It builds a Debian 13 rootfs with Node.js 22, PulseAudio, runtime libraries, and helper tools, then writes:
+The generated Debian base can be checked independently on an arm64 Docker VM:
+
+```bash
+./tools/base-runtime-smoke.sh
+```
+
+This verifies the Debian 13/trixie identity, Node.js startup, serial helper
+linkage, and the EGL/GLX/OpenGL/XKB libraries used by future offscreen Qt
+software. It does not contain or start an ExpertSDR3 release.
+
+`tools/build-rootfs.sh` requires Docker with `linux/arm64` support. It builds a Debian 13 rootfs with Node.js 22, runtime libraries (including offscreen Qt prerequisites), and helper tools, then writes:
 
 ```text
 app/src/main/assets/rootfs/rootfs-debian13-arm64.tgz
@@ -210,11 +224,13 @@ Debug builds include an exported no-display `DebugCommandActivity` under `app/sr
 ./tools/adb-debug.sh devices
 ./tools/adb-debug.sh install-apk
 ./tools/adb-debug.sh launch
+./tools/adb-debug.sh prepare-base
 ./tools/adb-debug.sh install-runtime
 ./tools/adb-debug.sh start
 ./tools/adb-debug.sh stop
 ./tools/adb-debug.sh logs
 ./tools/adb-debug.sh dns-smoke
+./tools/adb-debug.sh base-smoke
 ```
 
 Common debug loops:

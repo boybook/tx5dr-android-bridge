@@ -16,6 +16,7 @@ Commands:
   install-apk             Build and install debug APK with Gradle
   launch                  Open the normal TX-5DR UI
   bootstrap               Run product bootstrap flow
+  prepare-base            Extract/validate embedded Debian 13 base without a TX-5DR release
   install-runtime [url]   Trigger Install/Update; optional manifest URL
   start                   Start PRoot runtime
   stop                    Stop PRoot runtime
@@ -28,6 +29,7 @@ Commands:
   start-usb-serial        Start Android USB serial bridge and Linux PTY helper
   stop-usb-serial         Stop Android USB serial bridge and Linux PTY helper
   dns-smoke               Check PRoot /etc/resolv.conf, DNS lookup, and HTTPS reachability
+  base-smoke              Check Debian 13 rootfs, Node startup, and native dependencies inside PRoot
   audio-smoke [seconds]   Inspect Android audio manifest and Unix sockets
   output-smoke [seconds]  Inspect Android audio output sockets and recent logs
   serial-smoke [seconds]  Inspect Android serial manifest, PTYs, sockets, and recent latency stats
@@ -108,6 +110,9 @@ case "${1:-}" in
   bootstrap)
     run_debug_action com.tx5dr.bridge.debug.BOOTSTRAP
     ;;
+  prepare-base)
+    run_debug_action com.tx5dr.bridge.debug.PREPARE_BASE
+    ;;
   install-runtime)
     if [[ -n "${2:-}" ]]; then
       run_debug_action com.tx5dr.bridge.debug.INSTALL --es manifest_url "$2"
@@ -167,6 +172,45 @@ INNER
     tmp_script="$(mktemp)"
     make_proot_script "/bin/bash /opt/tx5dr-data/runtime/dns-smoke-inner.sh" "$tmp_script"
     write_and_run_proot_script "$tmp_script"
+    rm -f "$tmp_script"
+    ;;
+  base-smoke)
+    run_debug_action com.tx5dr.bridge.debug.PREPARE_BASE
+    for _ in $(seq 1 120); do
+      if "$ADB" shell "run-as $PKG test -e files/runtime/host-libs/libtalloc.so.2" >/dev/null 2>&1; then break; fi
+      sleep 1
+    done
+    "$ADB" shell "run-as $PKG test -e files/runtime/host-libs/libtalloc.so.2"
+    tmp_inner="$(mktemp)"
+    cat > "$tmp_inner" <<'INNER'
+#!/bin/bash
+set -e
+grep -q '^ID=debian$' /etc/os-release
+grep -q '^VERSION_ID=.*13' /etc/os-release
+grep -q '^VERSION_CODENAME=trixie$' /etc/os-release
+printf 'rootfs=debian 13 (trixie)\n'
+node --version
+test -x /usr/local/bin/tx5dr-android-serial-pty
+if ldd /usr/local/bin/tx5dr-android-serial-pty | grep -q 'not found'; then
+  echo 'serial helper has missing shared libraries' >&2
+  exit 1
+fi
+test -e /usr/lib/aarch64-linux-gnu/libEGL.so.1
+test -e /usr/lib/aarch64-linux-gnu/libGLX.so.0
+test -e /usr/lib/aarch64-linux-gnu/libOpenGL.so.0
+test -e /usr/lib/aarch64-linux-gnu/libxkbcommon.so.0
+printf 'serial-helper=ok\noffscreen-native-libs=ok\nBASE_RUNTIME_ANDROID_SMOKE_OK\n'
+INNER
+    "$ADB" push "$tmp_inner" /data/local/tmp/tx5dr-base-smoke-inner.sh >/dev/null
+    "$ADB" shell "run-as $PKG sh -c 'mkdir -p files/runtime/tx5dr-data/runtime && cat /data/local/tmp/tx5dr-base-smoke-inner.sh > files/runtime/tx5dr-data/runtime/base-smoke-inner.sh && chmod 700 files/runtime/tx5dr-data/runtime/base-smoke-inner.sh'"
+    tmp_script="$(mktemp)"
+    make_proot_script "/bin/bash /opt/tx5dr-data/runtime/base-smoke-inner.sh" "$tmp_script"
+    if ! write_and_run_proot_script "$tmp_script"; then
+      echo "Initial Android PRoot smoke invocation failed; retrying once after runtime preparation settles." >&2
+      sleep 2
+      write_and_run_proot_script "$tmp_script"
+    fi
+    rm -f "$tmp_inner"
     rm -f "$tmp_script"
     ;;
   audio-smoke)

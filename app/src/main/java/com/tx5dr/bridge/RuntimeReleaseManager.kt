@@ -14,6 +14,7 @@ import kotlin.math.max
 object RuntimeReleaseManager {
     private const val TAG = "RuntimeRelease"
     private val ROOTFS_REQUIRED_FILES = listOf(
+        "etc/os-release",
         "usr/bin/node",
         "usr/local/bin/tx5dr-android-serial-pty",
     )
@@ -25,17 +26,18 @@ object RuntimeReleaseManager {
             ?.trim()
             .orEmpty()
         if (!isBaseRuntimeCurrent(paths, expectedRootfsSha)) {
-            if (paths.rootfsReady.exists()) {
-                progress(InstallProgress(InstallProgressStage.Preparing))
-                paths.rootfsDir.deleteRecursively()
-                paths.rootfsDir.mkdirs()
-            }
+            progress(InstallProgress(InstallProgressStage.Preparing))
+            paths.rootfsDir.deleteRecursively()
+            paths.rootfsDir.mkdirs()
             val archive = paths.cacheDir.resolve("rootfs-debian13-arm64.tgz")
             progress(InstallProgress(InstallProgressStage.CopyingBase, artifactName = archive.name))
             copyAsset(context, "rootfs/rootfs-debian13-arm64.tgz", archive, executable = false)
             progress(InstallProgress(InstallProgressStage.ExtractingBase, artifactName = archive.name, entriesDone = 0))
             val extraction = ExtractionProgress(InstallProgressStage.ExtractingBase, archive.name, everyEntries = 5000, everyMs = 3000, progress)
             TarZstExtractor.extract(archive, paths.rootfsDir, { name -> extraction.onEntry(name) }, paths.zstdFile)
+            require(isDebian13Rootfs(paths.rootfsDir)) {
+                "Base runtime archive is not Debian 13 (trixie)"
+            }
             paths.rootfsReady.writeText(expectedRootfsSha.ifBlank { System.currentTimeMillis().toString() })
             progress(InstallProgress(InstallProgressStage.ExtractingBase, artifactName = archive.name, entriesDone = extraction.count))
         } else {
@@ -126,7 +128,23 @@ object RuntimeReleaseManager {
             val installed = try { paths.rootfsReady.readText().trim() } catch (_: Throwable) { "" }
             if (installed != expectedRootfsSha) return false
         }
-        return ROOTFS_REQUIRED_FILES.all { File(paths.rootfsDir, it).exists() }
+        return ROOTFS_REQUIRED_FILES.all { File(paths.rootfsDir, it).exists() } && isDebian13Rootfs(paths.rootfsDir)
+    }
+
+    private fun isDebian13Rootfs(rootfsDir: File): Boolean {
+        val fields = runCatching {
+            File(rootfsDir, "etc/os-release").readLines()
+                .mapNotNull { line ->
+                    val separator = line.indexOf('=')
+                    if (separator <= 0) return@mapNotNull null
+                    val key = line.substring(0, separator)
+                    val value = line.substring(separator + 1).trim().trim('"')
+                    key to value
+                }
+                .toMap()
+        }.getOrNull() ?: return false
+        return fields["ID"] == "debian" && fields["VERSION_ID"] == "13" &&
+            fields["VERSION_CODENAME"] == "trixie"
     }
 
     private fun selectAndroidAsset(manifest: JSONObject): JSONObject {
