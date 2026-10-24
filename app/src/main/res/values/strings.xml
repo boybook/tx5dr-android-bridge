@@ -220,4 +220,18 @@
     <string name="data_directory_open_hint">Open this path in Files: %1$s</string>
     <string name="not_available">Not available</string>
 
+    <string name="update_channel">Runtime update channel</string>
+    <string name="update_stable">Stable (recommended)</string>
+    <string name="update_nightly">Nightly</string>
+    <string name="update_channel_help">Choose a channel to preview its release. Changing the source does not install it. APK updates are independent. The URL below is for advanced custom sources.</string>
+    <string name="update_switch_warning">Installation stops the runtime and backs up user data. Switching to an older version may be incompatible; confirming forces the switch after backup. Restoring a backup discards later changes.</string>
+    <string name="apk_update">Check Android app update</string>
+    <string name="apk_no_release">No stable APK is available yet.</string>
+    <string name="apk_current">The Android app is up to date.</string>
+    <string name="apk_confirm">Android app: %1$s → %2$s. Download and verify this APK? Runtime channel will not change.</string>
+    <string name="apk_permission">Allow app installation in Settings, then check the app update again to install.</string>
+    <string name="update_stable_migration">A stable runtime is now available. Review the stable channel? Your current installation will not change until you confirm installation.</string>
+    <string name="update_restore">Restore last update backup</string>
+    <string name="update_restore_confirm">Stop the runtime and restore the previous program and data? Changes after that backup will no longer be active. A new backup preserves the current data first. Start the service manually after verifying the restoration.</string>
+    <string name="update_channel_empty">No runtime has been published in this channel yet. Keep your selection and try again later.</string>
 </resources>

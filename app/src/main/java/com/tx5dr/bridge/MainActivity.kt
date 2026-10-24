@@ -217,6 +217,7 @@ class MainActivity : ComponentActivity() {
                         manifestUrl = it
                         releasePreview = null
                         releasePreviewError = null
+                        if (it == "https://dl.tx5dr.com/tx-5dr/android-runtime/release/latest.json" || it == "https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json") { BridgeRuntime.setManifestUrl(it); checkRemoteVersion(force = true) }
                     },
                     onAutoStartRuntimeChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_START_RUNTIME, it) },
                     onAutoOpenWebViewChange = { setBooleanPreference(BridgeRuntime.PREF_AUTO_OPEN_WEBVIEW, it) },
@@ -435,6 +436,9 @@ class MainActivity : ComponentActivity() {
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                     notificationBridge.updateUrl(url)
+                    if (url != null && isAllowedWebUrl(Uri.parse(url))) {
+                        view?.evaluateJavascript("window.TX5DRUpdates={openUpdates:function(){location.href='tx5dr://updates'}};window.dispatchEvent(new Event('tx5dr-updates-ready'))", null)
+                    }
                     if (generation == webLoadGeneration && view === nativeWebView) {
                         webPageCommitted = false
                         webLoadStartedAtMs = System.currentTimeMillis()
@@ -446,6 +450,10 @@ class MainActivity : ComponentActivity() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     if (!request.isForMainFrame) return false
                     val requestUrl = request.url
+                    if (requestUrl.toString() == "tx5dr://updates" && request.isForMainFrame && view?.url?.let { isAllowedWebUrl(Uri.parse(it)) } == true) {
+                        runOnUiThread { releaseWebView(); prepareInstallDialog() }
+                        return true
+                    }
                     if (isAllowedWebUrl(requestUrl)) return false
                     LogBus.w("WebView", "Blocked external navigation: $requestUrl")
                     runCatching { startActivity(Intent(Intent.ACTION_VIEW, requestUrl)) }
@@ -454,6 +462,9 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPageCommitVisible(view: WebView, url: String) {
                     notificationBridge.updateUrl(url)
+                    if (url != null && isAllowedWebUrl(Uri.parse(url))) {
+                        view?.evaluateJavascript("window.TX5DRUpdates={openUpdates:function(){location.href='tx5dr://updates'}};window.dispatchEvent(new Event('tx5dr-updates-ready'))", null)
+                    }
                     if (generation == webLoadGeneration && view === nativeWebView) {
                         webPageCommitted = true
                         val elapsed = System.currentTimeMillis() - webLoadStartedAtMs
@@ -467,6 +478,9 @@ class MainActivity : ComponentActivity() {
 
                 override fun onPageFinished(view: WebView, url: String) {
                     notificationBridge.updateUrl(url)
+                    if (url != null && isAllowedWebUrl(Uri.parse(url))) {
+                        view?.evaluateJavascript("window.TX5DRUpdates={openUpdates:function(){location.href='tx5dr://updates'}};window.dispatchEvent(new Event('tx5dr-updates-ready'))", null)
+                    }
                     LogBus.i("WebView", "Page finished: ${url.substringBefore('?')}")
                     installWebChromeProbe(view)
                     installWebDownloadBridge(view)
@@ -1215,17 +1229,12 @@ class MainActivity : ComponentActivity() {
         showSettingsSheet = false
         showLogSheet = false
         showInstallDialog = false
-        if (shouldStopBeforeInstall(bridgeStatus.runtimeState)) {
-            installAfterRuntimeStop = true
-            webSuppressedForSession = true
-            releaseWebView()
-            stopRuntime()
-            return
-        }
         startInstallNow()
     }
 
     private fun startInstallNow() {
+        val targetVersion = releasePreview?.version ?: return
+        BridgeRuntime.setStringPreference("requestedUpdateVersion", targetVersion)
         BridgeRuntime.setManifestUrl(manifestUrl)
         BridgeService.start(this, BridgeService.ACTION_INSTALL)
     }
@@ -1242,7 +1251,9 @@ class MainActivity : ComponentActivity() {
         releasePreview = null
         releasePreviewError = null
         showInstallDialog = true
-        BridgeRuntime.fetchReleasePreview(manifestUrl) { preview, error ->
+        val previewUrl = manifestUrl
+        BridgeRuntime.fetchReleasePreview(previewUrl) { preview, error ->
+            if (manifestUrl != previewUrl) return@fetchReleasePreview
             releasePreview = preview
             releasePreviewError = error
         }
@@ -1257,8 +1268,23 @@ class MainActivity : ComponentActivity() {
         lastReleasePreviewAtMs = now
         BridgeRuntime.setManifestUrl(url)
         BridgeRuntime.fetchReleasePreview(url) { preview, error ->
+            if (manifestUrl != url) return@fetchReleasePreview
             releasePreview = preview
             releasePreviewError = error
+        }
+        if (url == "https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json" && !BridgeRuntime.getPreference("stableMigrationOffered", false)) {
+            val stableUrl = "https://dl.tx5dr.com/tx-5dr/android-runtime/release/latest.json"
+            BridgeRuntime.fetchReleasePreview(stableUrl) { stable, _ ->
+                if (stable == null || manifestUrl != url || bridgeStatus.runtimeState == RuntimeState.Installing || isFinishing) return@fetchReleasePreview
+                BridgeRuntime.setPreference("stableMigrationOffered", true)
+                android.app.AlertDialog.Builder(this).setMessage(R.string.update_stable_migration)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(R.string.update_stable) { _, _ ->
+                        manifestUrl = stableUrl
+                        BridgeRuntime.setManifestUrl(stableUrl)
+                        prepareInstallDialog()
+                    }.show()
+            }
         }
     }
 

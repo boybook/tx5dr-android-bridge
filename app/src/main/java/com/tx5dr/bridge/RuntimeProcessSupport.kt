@@ -15,7 +15,8 @@ object RuntimeProcessSupport {
         }
     }
 
-    fun buildRuntimeCommand(baseCommand: List<String>, webPort: Int = 8076): List<String> {
+    fun buildRuntimeCommand(baseCommand: List<String>, webPort: Int = 8076, shutdownToken: String = ""): List<String> {
+        require(shutdownToken.isEmpty() || shutdownToken.matches(Regex("[a-f0-9]{64}")))
         val script = """
 set -e
 mkdir -p /opt/tx5dr-data/config /opt/tx5dr-data/cache /opt/tx5dr-data/runtime /opt/tx5dr-data/android-dev /opt/tx5dr-user/data /opt/tx5dr-user/logs /opt/tx5dr-user/plugins /opt/tx5dr-user/plugin-data
@@ -25,6 +26,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export NODE_ENV=production
 export PORT=4000
 export HOST=127.0.0.1
+export TX5DR_INTERNAL_SHUTDOWN_TOKEN='$shutdownToken'
 export TX5DR_SERVER_PORT_STRICT=1
 export TX5DR_SERVER_READY_FILE=/opt/tx5dr-data/runtime/server-ready.json
 export TX5DR_RUNTIME_FLAVOR=android-bridge

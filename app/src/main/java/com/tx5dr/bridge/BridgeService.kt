@@ -43,6 +43,7 @@ class BridgeService : Service() {
                 applyWakeLock(false)
             }
             ACTION_INSTALL -> BridgeRuntime.installOrUpdate()
+            ACTION_RESTORE -> BridgeRuntime.restoreLastUpdateBackup()
             ACTION_START_BRIDGES -> BridgeRuntime.startBridges()
             ACTION_STOP_BRIDGES -> {
                 BridgeRuntime.stopBridges()
@@ -206,6 +207,7 @@ class BridgeService : Service() {
         const val ACTION_PREPARE_BASE = "com.tx5dr.bridge.PREPARE_BASE"
         const val ACTION_START_RUNTIME = "com.tx5dr.bridge.START_RUNTIME"
         const val ACTION_STOP_RUNTIME = "com.tx5dr.bridge.STOP_RUNTIME"
+        const val ACTION_RESTORE = "com.tx5dr.bridge.RESTORE_UPDATE"
         const val ACTION_INSTALL = "com.tx5dr.bridge.INSTALL"
         const val ACTION_START_BRIDGES = "com.tx5dr.bridge.START_BRIDGES"
         const val ACTION_STOP_BRIDGES = "com.tx5dr.bridge.STOP_BRIDGES"

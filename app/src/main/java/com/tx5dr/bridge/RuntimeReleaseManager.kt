@@ -11,8 +11,34 @@ import java.net.URL
 import java.security.MessageDigest
 import kotlin.math.max
 
+class RuntimeChannelEmptyException : IllegalStateException("update_channel_empty")
+private class ReleaseHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
+
 object RuntimeReleaseManager {
     private const val TAG = "RuntimeRelease"
+    private val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var activeDownload: HttpURLConnection? = null
+    fun cancelInstall() { cancelled.set(true); activeDownload?.disconnect() }
+    fun wasCancelled(): Boolean = cancelled.get()
+    private fun checkCancelled() { if (cancelled.get()) throw java.util.concurrent.CancellationException("Update cancelled") }
+    private val previews = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun validatedManifest(url: String, text: String): JSONObject {
+        val manifest = JSONObject(text)
+        require(manifest.getString("product") == "android-runtime") { "Wrong update product" }
+        val channel = manifest.getString("channel")
+        require(channel in setOf("release", "nightly")) { "Invalid channel" }
+        if (url.contains("/release/") || url.contains("/nightly/")) require(url.contains("/$channel/")) { "Channel mismatch" }
+        require(manifest.optInt("schema_version", 1) == 1) { "Unsupported manifest schema" }
+        require(manifest.getString("version").matches(Regex("[0-9]+[.][0-9]+[.][0-9]+([-+][A-Za-z0-9.+-]+)?"))) { "Invalid version" }
+        require(manifest.getString("commit").matches(Regex("[a-fA-F0-9]{7,40}"))) { "Invalid commit" }
+        require(manifest.optLong("minimum_android_version_code", 0) <= BuildConfig.VERSION_CODE) { "Update the Android app before installing this runtime" }
+        val asset = selectAndroidAsset(manifest)
+        require(asset.getString("name").matches(Regex("[A-Za-z0-9._+-]+"))) { "Invalid asset name" }
+        require(asset.getString("sha256").matches(Regex("[a-fA-F0-9]{64}"))) { "Invalid checksum" }
+        require(asset.getLong("size") > 0) { "Invalid asset size" }
+        return manifest
+    }
     private val ROOTFS_REQUIRED_FILES = listOf(
         "etc/os-release",
         "usr/bin/node",
@@ -45,19 +71,26 @@ object RuntimeReleaseManager {
         }
     }
 
-    fun installTx5drRelease(paths: RuntimePaths, manifestUrl: String, progress: (InstallProgress) -> Unit): String {
+    fun installTx5drRelease(paths: RuntimePaths, manifestUrl: String, expectedVersion: String, beforeActivate: () -> Unit, progress: (InstallProgress) -> Unit): String {
+        cancelled.set(false)
         progress(InstallProgress(InstallProgressStage.FetchingManifest))
-        val manifest = JSONObject(downloadText(manifestUrl))
+        val manifest = validatedManifest(manifestUrl, previews.remove(manifestUrl) ?: error("Preview this release again before installing"))
+        require(manifest.getString("version") == expectedVersion) { "Update target changed; preview again" }
         LogBus.i(TAG, "Manifest parsed: version=${manifest.optString("version", "unknown")} channel=${manifest.optString("channel", "unknown")}")
         val asset = selectAndroidAsset(manifest)
         val name = asset.getString("name")
         val url = asset.optString("url_cn", asset.optString("url", asset.optString("url_oss")))
         val sha256 = asset.getString("sha256").lowercase()
         val expectedSize = asset.optLong("size", -1L)
-        require(url.startsWith("https://") || url.startsWith("http://")) { "Invalid artifact URL in manifest" }
+        require(url.startsWith("https://")) { "Invalid artifact URL in manifest" }
         val archive = paths.cacheDir.resolve(name)
         LogBus.i(TAG, "Selected artifact: $name (${formatBytes(expectedSize)}), sha256=$sha256")
-        downloadFile(url, archive, progress)
+        try { downloadFile(url, archive, progress) } catch (error: Throwable) {
+            checkCancelled()
+            val alternate = asset.optString("url_github", asset.optString("url_global"))
+            if (!alternate.startsWith("https://") || alternate == url) throw error
+            downloadFile(alternate, archive, progress)
+        }
         if (expectedSize > 0 && archive.length() != expectedSize) {
             error("Downloaded size mismatch: expected ${formatBytes(expectedSize)}, got ${formatBytes(archive.length())}")
         }
@@ -67,18 +100,19 @@ object RuntimeReleaseManager {
         progress(InstallProgress(InstallProgressStage.Verifying, artifactName = name, bytesDone = archive.length(), bytesTotal = archive.length()))
 
         val version = manifest.optString("version", manifest.optString("commit", "unknown"))
-        val releaseDir = paths.releasesDir.resolve(version.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+        val releaseDir = paths.releasesDir.resolve(version.replace(Regex("[^A-Za-z0-9._-]"), "_") + "-" + System.currentTimeMillis())
         val tmpDir = paths.releasesDir.resolve(".${releaseDir.name}.tmp")
         tmpDir.deleteRecursively()
         tmpDir.mkdirs()
         progress(InstallProgress(InstallProgressStage.ExtractingRelease, artifactName = releaseDir.name, entriesDone = 0))
         val extraction = ExtractionProgress(InstallProgressStage.ExtractingRelease, releaseDir.name, everyEntries = 5000, everyMs = 3000, progress)
-        TarZstExtractor.extract(archive, tmpDir, { entry -> extraction.onEntry(entry) }, zstdHelper = paths.zstdFile)
+        TarZstExtractor.extract(archive, tmpDir, { entry -> checkCancelled(); extraction.onEntry(entry) }, zstdHelper = paths.zstdFile)
         progress(InstallProgress(InstallProgressStage.ExtractingRelease, artifactName = releaseDir.name, entriesDone = extraction.count))
         val missing = missingReleaseFiles(tmpDir)
         require(missing.isEmpty()) { "Extracted TX-5DR release is missing expected runtime files: ${missing.joinToString(", ")}" }
-        releaseDir.deleteRecursively()
+        checkCancelled()
         progress(InstallProgress(InstallProgressStage.Activating, artifactName = releaseDir.name))
+        beforeActivate()
         require(tmpDir.renameTo(releaseDir)) { "Failed to move release into place" }
         switchCurrent(paths, releaseDir)
         LogBus.i(TAG, "Current release points to ${releaseDir.absolutePath}")
@@ -87,7 +121,21 @@ object RuntimeReleaseManager {
     }
 
     fun fetchReleasePreview(manifestUrl: String): ReleasePreview {
-        val manifest = JSONObject(downloadText(manifestUrl))
+        val text = try { downloadText(manifestUrl) } catch (error: Throwable) {
+            val channel = when {
+                manifestUrl == "https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json" -> "nightly"
+                manifestUrl == "https://dl.tx5dr.com/tx-5dr/android-runtime/release/latest.json" -> "release"
+                else -> throw error
+            }
+            try {
+                downloadText(if (channel == "nightly") "https://github.com/boybook/tx-5dr/releases/download/nightly-android-runtime/latest.json" else "https://github.com/boybook/tx-5dr/releases/latest/download/android-runtime-manifest.json")
+            } catch (fallback: Throwable) {
+                if (error is ReleaseHttpException && error.statusCode == 404 && fallback is ReleaseHttpException && fallback.statusCode == 404) throw RuntimeChannelEmptyException()
+                throw error
+            }
+        }
+        val manifest = validatedManifest(manifestUrl, text)
+        previews[manifestUrl] = text
         val asset = selectAndroidAsset(manifest)
         return ReleasePreview(
             version = manifest.optString("version", manifest.optString("commit", "unknown")),
@@ -150,9 +198,7 @@ object RuntimeReleaseManager {
     private fun selectAndroidAsset(manifest: JSONObject): JSONObject {
         val assets = manifest.getJSONArray("assets")
         findAsset(assets, platformOnly = true, packageTypes = setOf("tar.gz"))?.let { return it }
-        findAsset(assets, platformOnly = false, packageTypes = setOf("tar.gz"))?.let { return it }
         findAsset(assets, platformOnly = true, packageTypes = setOf("tar.zst"))?.let { return it }
-        findAsset(assets, platformOnly = false, packageTypes = setOf("tar.zst"))?.let { return it }
         error("Manifest has no android arm64 tar.gz/tar.zst asset")
     }
 
@@ -168,14 +214,15 @@ object RuntimeReleaseManager {
         return null
     }
 
-    private fun switchCurrent(paths: RuntimePaths, releaseDir: File) {
-        deletePathOrSymlink(paths.currentLink)
-        try {
-            java.nio.file.Files.createSymbolicLink(paths.currentLink.toPath(), File("releases/${releaseDir.name}").toPath())
-        } catch (_: Throwable) {
-            paths.currentLink.mkdirs()
-            releaseDir.copyRecursively(paths.currentLink, overwrite = true)
+    fun switchCurrent(paths: RuntimePaths, releaseDir: File) {
+        require(releaseDir.canonicalFile.parentFile == paths.releasesDir.canonicalFile) { "Invalid runtime directory" }
+        val next = File(paths.txDir, "current.next")
+        deletePathOrSymlink(next)
+        java.nio.file.Files.createSymbolicLink(next.toPath(), File("releases/${releaseDir.name}").toPath())
+        if (paths.currentLink.exists() && !java.nio.file.Files.isSymbolicLink(paths.currentLink.toPath())) {
+            require(paths.currentLink.renameTo(File(paths.releasesDir, "legacy-" + System.currentTimeMillis()))) { "Cannot preserve legacy runtime" }
         }
+        java.nio.file.Files.move(next.toPath(), paths.currentLink.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
     }
 
     private fun deletePathOrSymlink(path: File) {
@@ -227,7 +274,9 @@ object RuntimeReleaseManager {
         val part = File(target.parentFile, "${target.name}.part")
         part.delete()
         val conn = openHttp(url, connectTimeoutMs = 20000, readTimeoutMs = 120000)
+        activeDownload = conn
         try {
+            checkCancelled()
             val code = conn.responseCode
             val total = conn.contentLengthLong
             LogBus.i(TAG, "Artifact HTTP $code, contentLength=${formatBytes(total)}, contentType=${conn.contentType ?: "unknown"}")
@@ -243,6 +292,7 @@ object RuntimeReleaseManager {
                 FileOutputStream(part).use { output ->
                     val buffer = ByteArray(1024 * 256)
                     while (true) {
+                        checkCancelled()
                         val read = input.read(buffer)
                         if (read <= 0) break
                         output.write(buffer, 0, read)
@@ -270,6 +320,7 @@ object RuntimeReleaseManager {
             require(part.renameTo(target)) { "Failed to move downloaded file into cache" }
             progress(InstallProgress(InstallProgressStage.Downloading, artifactName = target.name, bytesDone = target.length(), bytesTotal = total))
         } finally {
+            activeDownload = null
             conn.disconnect()
             if (part.exists() && !target.exists()) part.delete()
         }
@@ -284,6 +335,7 @@ object RuntimeReleaseManager {
         file.inputStream().use { input ->
             val buffer = ByteArray(1024 * 1024)
             while (true) {
+                checkCancelled()
                 val n = input.read(buffer)
                 if (n <= 0) break
                 digest.update(buffer, 0, n)
@@ -315,7 +367,7 @@ object RuntimeReleaseManager {
         } catch (_: Throwable) {
             ""
         }
-        return IllegalStateException("HTTP $code while downloading $kind: $url${if (body.isBlank()) "" else " body=${body.replace('\n', ' ')}"}")
+        return ReleaseHttpException(code, "HTTP $code while downloading $kind: $url${if (body.isBlank()) "" else " body=${body.replace('\n', ' ')}"}")
     }
 
     private class ExtractionProgress(

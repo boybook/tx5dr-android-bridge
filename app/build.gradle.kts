@@ -35,6 +35,7 @@ android {
         targetSdk = 34
         versionCode = envInt("TX5DR_ANDROID_VERSION_CODE", 1)
         versionName = env("TX5DR_ANDROID_VERSION_NAME") ?: "0.1.0-poc"
+        buildConfigField("String", "DEFAULT_UPDATE_CHANNEL", "\"${if (env("RELEASE_CHANNEL") == "release") "release" else "nightly"}\"")
 
         ndk {
             abiFilters += listOf("arm64-v8a")

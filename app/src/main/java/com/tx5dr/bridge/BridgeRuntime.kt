@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 
 object BridgeRuntime {
     private const val TAG = "RuntimeManager"
-    private const val DEFAULT_MANIFEST_URL = "https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json"
+    private val DEFAULT_MANIFEST_URL = "https://dl.tx5dr.com/tx-5dr/android-runtime/${BuildConfig.DEFAULT_UPDATE_CHANNEL}/latest.json"
     private const val STARTUP_HEALTH_TIMEOUT_MS = 60_000L
     private const val STOP_TIMEOUT_SECONDS = 8L
     private val executor = Executors.newSingleThreadExecutor()
@@ -27,6 +27,7 @@ object BridgeRuntime {
     private lateinit var app: Context
     private lateinit var prefs: SharedPreferences
     private var prootProcess: Process? = null
+    private var updateShutdownToken: String = ""
     private var audioBridgeProcess: Process? = null
     private val serialPtyProcesses = mutableMapOf<String, Process>()
     private var healthRunning = false
@@ -48,6 +49,10 @@ object BridgeRuntime {
         AndroidAudioBridge.startWatchingDevices(app)
         AndroidUsbSerialBridge.init(app, paths.androidSerialDevicesFile)
         registerUsbHotplugReceiver()
+        if (!prefs.contains("manifestUrl") && paths.currentLink.exists()) {
+            prefs.edit().putString("manifestUrl", "https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json").commit()
+        }
+        writeUpdateProjection()
         updateStatus(detectInitialStatus())
     }
 
@@ -62,8 +67,138 @@ object BridgeRuntime {
 
     fun getManifestUrl(): String = prefs.getString("manifestUrl", DEFAULT_MANIFEST_URL) ?: DEFAULT_MANIFEST_URL
 
+    fun canChangeUpdateChannel(): Boolean = status.runtimeState != RuntimeState.Installing || status.installProgress?.stage in setOf(
+        InstallProgressStage.FetchingManifest, InstallProgressStage.Downloading, InstallProgressStage.Verifying, InstallProgressStage.ExtractingRelease,
+    )
+
     fun setManifestUrl(url: String) {
-        prefs.edit().putString("manifestUrl", url.trim()).apply()
+        if (status.runtimeState == RuntimeState.Installing) {
+            if (!canChangeUpdateChannel()) return
+            RuntimeReleaseManager.cancelInstall()
+            executor.execute {
+                check(prefs.edit().putString("manifestUrl", url.trim()).commit())
+                writeUpdateProjection()
+            }
+            return
+        }
+        check(prefs.edit().putString("manifestUrl", url.trim()).commit()) { "Cannot save update source" }
+        writeUpdateProjection()
+    }
+
+    private fun writeUpdateProjection() {
+        val channel = if (getManifestUrl().contains("/release/")) "release" else "nightly"
+        val file = android.util.AtomicFile(File(paths.externalUserDataDir, "android-update-state.json"))
+        val stream = file.startWrite()
+        try {
+            stream.write(org.json.JSONObject().put("channel", channel).put("customSource", !getManifestUrl().startsWith("https://dl.tx5dr.com/tx-5dr/android-runtime/")).toString().toByteArray())
+            file.finishWrite(stream)
+        } catch (error: Throwable) { file.failWrite(stream); throw error }
+    }
+
+    private fun prepareUpdateBackup() {
+        stopRequested = true
+        healthRunning = false
+        val process = prootProcess
+        if (process?.isAlive == true) {
+            check(updateShutdownToken.isNotEmpty()) { "Restart the runtime before updating" }
+            val connection = java.net.URL("http://127.0.0.1:4000/api/system/internal/prepare-shutdown").openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 45000
+            connection.setRequestProperty("x-tx5dr-internal-token", updateShutdownToken)
+            try {
+                check(connection.responseCode == 200 && org.json.JSONObject(connection.inputStream.bufferedReader().use { it.readText() }).optBoolean("success")) { "Runtime did not drain safely; installation cancelled" }
+            } finally { connection.disconnect() }
+            process.destroy()
+            check(process.waitFor(45, TimeUnit.SECONDS)) { "Runtime did not stop safely; update cancelled" }
+            check(process.exitValue() == 0 || process.exitValue() == 143) { "Runtime shutdown failed; update cancelled" }
+        }
+        prootProcess = null
+        stopAuxiliaryProcesses()
+        val backup = File(paths.base, "update-backups/" + System.currentTimeMillis())
+        check(backup.mkdirs()) { "Cannot create backup" }
+        listOf(paths.dataDir, paths.externalUserDataDir, paths.externalPluginsDir, paths.externalPluginDataDir).distinct().forEachIndexed { index, root ->
+            if (root.exists()) {
+                val destination = File(backup, "data-$index")
+                root.walkTopDown().onEnter { it != File(root, "runtime") && !java.nio.file.Files.isSymbolicLink(it.toPath()) }.forEach { source ->
+                    val target = File(destination, source.relativeTo(root).path)
+                    if (java.nio.file.Files.isSymbolicLink(source.toPath())) {
+                        target.parentFile.mkdirs()
+                        java.nio.file.Files.createSymbolicLink(target.toPath(), java.nio.file.Files.readSymbolicLink(source.toPath()))
+                    } else if (source.isDirectory) target.mkdirs()
+                    else if (source.isFile) source.copyTo(target, overwrite = false)
+                }
+            }
+        }
+        File(backup, "backup.json").writeText(org.json.JSONObject().put("version", prefs.getString("installedVersion", "unknown")).put("runtimeDirectory", paths.currentLink.takeIf { it.exists() }?.canonicalPath).put("roots", org.json.JSONArray(listOf(paths.dataDir, paths.externalUserDataDir, paths.externalPluginsDir, paths.externalPluginDataDir).distinct().map { it.absolutePath })).toString())
+        File(backup, "RESTORE.txt").writeText("Stop the runtime. Preserve newer data separately. Restore each data-N to the corresponding root in backup.json, then reinstall the source runtime. Restoring discards changes after this backup. Third-party plugin compatibility is not guaranteed.")
+        check(prefs.edit().putString("lastUpdateBackup", backup.absolutePath).putString("rollbackRuntime", paths.currentLink.takeIf { it.exists() }?.canonicalPath).putString("rollbackVersion", prefs.getString("installedVersion", "unknown")).commit())
+    }
+
+    fun hasUpdateBackup(): Boolean = runCatching {
+        val backup = prefs.getString("lastUpdateBackup", null) ?: return false
+        val snapshot = org.json.JSONObject(File(backup, "backup.json").readText())
+        val runtime = snapshot.optString("runtimeDirectory")
+        runtime.isNotBlank() && RuntimeReleaseManager.isReleaseUsable(File(runtime))
+    }.getOrDefault(false)
+
+    fun restoreLastUpdateBackup() {
+        executor.execute {
+            try {
+                check(status.runtimeState != RuntimeState.Installing) { "Update in progress" }
+                val backup = File(prefs.getString("lastUpdateBackup", null) ?: error("No update backup"))
+                require(backup.canonicalFile.parentFile == File(paths.base, "update-backups").canonicalFile) { "Invalid backup location" }
+                val manifest = org.json.JSONObject(File(backup, "backup.json").readText())
+                val roots = manifest.getJSONArray("roots")
+                val allowed = listOf(paths.dataDir, paths.externalUserDataDir, paths.externalPluginsDir, paths.externalPluginDataDir).distinct()
+                require(roots.length() == allowed.size) { "Backup roots changed" }
+                val runtime = File(manifest.getString("runtimeDirectory"))
+                require(runtime.canonicalFile.parentFile == paths.releasesDir.canonicalFile && RuntimeReleaseManager.isReleaseUsable(runtime)) { "Original runtime is unavailable" }
+                allowed.forEachIndexed { index, root ->
+                    require(roots.getString(index) == root.absolutePath && File(backup, "data-$index").isDirectory) { "Incomplete backup" }
+                }
+                updateStatus(status.copy(runtimeState = RuntimeState.Installing, installProgress = InstallProgress(InstallProgressStage.Preparing)))
+                // A second snapshot preserves post-update changes before the user-requested restore.
+                prepareUpdateBackup()
+                val stagedRoots = allowed.mapIndexed { index, root ->
+                    val staged = File(root.parentFile, ".${root.name}.restore-${System.currentTimeMillis()}")
+                    check(File(backup, "data-$index").copyRecursively(staged)) { "Restore staging failed" }
+                    Triple(root, staged, File(root.parentFile, ".${root.name}.before-restore-${System.currentTimeMillis()}"))
+                }
+                val activated = mutableListOf<Triple<File, File, File>>()
+                try {
+                    stagedRoots.forEach { entry ->
+                        val (root, staged, previous) = entry
+                        check(root.renameTo(previous)) { "Cannot preserve current data" }
+                        activated.add(entry)
+                        check(staged.renameTo(root)) { "Restore activation failed" }
+                    }
+                    RuntimeReleaseManager.switchCurrent(paths, runtime)
+                } catch (error: Throwable) {
+                    activated.asReversed().forEach { (root, _, previous) ->
+                        if (root.exists()) check(root.renameTo(File(root.parentFile, ".${root.name}.failed-restore-${System.currentTimeMillis()}")))
+                        check(previous.renameTo(root)) { "Restore failed; preserved data: ${previous.absolutePath}" }
+                    }
+                    recoverUpdateRuntime()
+                    throw error
+                }
+                prefs.edit().putString("installedVersion", manifest.getString("version")).remove("rollbackRuntime").commit()
+                paths.ensureDirs()
+                writeUpdateProjection()
+                updateStatus(detectInitialStatus().copy(error = null, installProgress = null))
+            } catch (error: Throwable) {
+                LogBus.e(TAG, "Explicit update restore failed; preserved data and backups remain available", error)
+                updateStatus(status.copy(runtimeState = RuntimeState.Error, runtimePhase = RuntimePhase.Error, error = error.message, installProgress = null))
+            }
+        }
+    }
+
+    private fun recoverUpdateRuntime() {
+        val previous = prefs.getString("rollbackRuntime", null) ?: return
+        val directory = File(previous)
+        if (directory.exists()) RuntimeReleaseManager.switchCurrent(paths, directory)
+        prefs.edit().putString("installedVersion", prefs.getString("rollbackVersion", "unknown")).remove("rollbackRuntime").commit()
+        LogBus.e(TAG, "Update failed; previous runtime restored. User data was not restored. Backup: ${prefs.getString("lastUpdateBackup", "unknown")}")
     }
 
     fun getPreference(key: String, defaultValue: Boolean): Boolean = prefs.getBoolean(key, defaultValue)
@@ -180,7 +315,7 @@ object BridgeRuntime {
         executor.execute {
             runCatching { RuntimeProcessSupport.buildAuthenticatedWebUrl(baseUrl, adminToken) }
                 .onSuccess { url -> main.post { callback(url, null) } }
-                .onFailure { error -> main.post { callback(null, error.message ?: error.javaClass.simpleName) } }
+                .onFailure { error -> main.post { callback(null, if (error is RuntimeChannelEmptyException) app.getString(R.string.update_channel_empty) else error.message ?: error.javaClass.simpleName) } }
         }
     }
 
@@ -198,6 +333,7 @@ object BridgeRuntime {
 
     fun installOrUpdate() {
         executor.execute {
+            var activationPrepared = false
             try {
                 LogBus.i(TAG, "Install/update started")
                 RuntimeCompatibility.requireSupported(paths.nativeLibDir)
@@ -209,15 +345,22 @@ object BridgeRuntime {
                     installProgress = InstallProgress(InstallProgressStage.Preparing),
                 ))
                 RuntimeReleaseManager.ensureBaseRuntime(app, paths, ::logProgress)
-                val version = RuntimeReleaseManager.installTx5drRelease(paths, getManifestUrl(), ::logProgress)
-                prefs.edit().putString("installedVersion", version).apply()
+                val wasRunning = prootProcess?.isAlive == true
+                val version = RuntimeReleaseManager.installTx5drRelease(paths, getManifestUrl(), getStringPreference("requestedUpdateVersion", ""), { prepareUpdateBackup(); activationPrepared = true }, ::logProgress)
+                prefs.edit().putString("installedVersion", version).commit()
                 updateStatus(detectInitialStatus().copy(
                     runtimeDetail = INSTALL_SUCCESS_DETAIL,
                     error = null,
                     progress = "Install/update complete",
                     installProgress = null,
                 ))
+                if (wasRunning) start()
             } catch (error: Throwable) {
+                if (activationPrepared) recoverUpdateRuntime()
+                if (RuntimeReleaseManager.wasCancelled() && !activationPrepared) {
+                    updateStatus(detectInitialStatus().copy(error = null, installProgress = null))
+                    return@execute
+                }
                 LogBus.e(TAG, "Install/update failed", error)
                 updateStatus(status.copy(runtimeState = RuntimeState.Error, runtimePhase = RuntimePhase.Error, error = error.message, installProgress = null))
             }
@@ -230,7 +373,7 @@ object BridgeRuntime {
                 val preview = RuntimeReleaseManager.fetchReleasePreview(manifestUrl)
                 main.post { callback(preview, null) }
             } catch (error: Throwable) {
-                main.post { callback(null, error.message ?: error.javaClass.simpleName) }
+                main.post { callback(null, if (error is RuntimeChannelEmptyException) app.getString(R.string.update_channel_empty) else error.message ?: error.javaClass.simpleName) }
             }
         }
     }
@@ -269,7 +412,8 @@ object BridgeRuntime {
                 ensureHostRuntimeEnvironment()
                 RuntimeProcessSupport.resetReadyFiles(paths)
                 updateStatus(status.copy(runtimeState = RuntimeState.Starting, runtimePhase = RuntimePhase.StartingSupervisor, runtimeDetail = "Starting service process", error = null, progress = "Starting service process"))
-                val process = newProotProcess(RuntimeProcessSupport.buildRuntimeCommand(buildProotBaseCommand(), getWebPort()))
+                updateShutdownToken = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+                val process = newProotProcess(RuntimeProcessSupport.buildRuntimeCommand(buildProotBaseCommand(), getWebPort(), updateShutdownToken))
                     .directory(paths.workDir)
                     .redirectErrorStream(true)
                     .start()
@@ -287,6 +431,7 @@ object BridgeRuntime {
                 healthRunning = false
                 stopAuxiliaryProcesses()
                 cleanupStaleRuntimeProcesses("after start failure")
+                recoverUpdateRuntime()
                 updateStatus(status.copy(
                     runtimeState = RuntimeState.Error,
                     runtimePhase = RuntimePhase.Error,
@@ -599,7 +744,7 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
         processMonitorExecutor.execute {
             val exitCode = process.waitFor()
             LogBus.w(TAG, "PRoot runtime exited with code $exitCode")
-            if (prootProcess == process) {
+            if (prootProcess == process && status.runtimeState != RuntimeState.Installing) {
                 prootProcess = null
                 healthRunning = false
                 stopAuxiliaryProcesses()
@@ -616,6 +761,7 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
                         lastExitCode = exitCode,
                     ))
                 } else if (status.runtimeState != RuntimeState.Error) {
+                    executor.execute { recoverUpdateRuntime() }
                     val reason = "Service process exited with code $exitCode"
                     updateStatus(status.copy(
                         runtimeState = RuntimeState.Error,
@@ -691,6 +837,7 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
                         progress = readyDetail ?: "Waiting for health checks",
                     )
                 }
+                if (server && webApi && prefs.contains("rollbackRuntime")) prefs.edit().remove("rollbackRuntime").commit()
                 if (!stopRequested && status.runtimeState != RuntimeState.Stopping) updateStatus(next)
                 if (!server && System.currentTimeMillis() - startedAtMs > STARTUP_HEALTH_TIMEOUT_MS) {
                     failUnresponsiveRuntime(process, readyDetail ?: "TX-5DR API did not respond within 60 seconds")
@@ -721,6 +868,7 @@ exec tx5dr-android-serial-pty ${device.path} ${device.bridgeSocket}
             healthRunning = false
             stopAuxiliaryProcesses()
             cleanupStaleRuntimeProcesses("health timeout")
+            recoverUpdateRuntime()
         }
     }
 

@@ -5,6 +5,8 @@
 
 package com.tx5dr.bridge.ui
 
+import com.tx5dr.bridge.BridgeRuntime
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
@@ -909,10 +911,11 @@ private fun InstallRuntimeDialog(
                         Text(stringResource(R.string.release_preview_loading), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                Text(stringResource(R.string.update_switch_warning), color = MaterialTheme.colorScheme.error)
                 Text(manifestUrl, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
-        confirmButton = { Button(onClick = onConfirm) { Text(stringResource(R.string.action_start)) } },
+        confirmButton = { Button(onClick = onConfirm, enabled = releasePreview != null && releasePreviewError == null) { Text(stringResource(R.string.action_start)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }
@@ -1055,6 +1058,8 @@ private fun SettingsSheet(
     onRefreshLan: () -> Unit,
     onInstallClick: () -> Unit,
 ) {
+    val updateContext = androidx.compose.ui.platform.LocalContext.current
+    var showCustomUpdateSource by remember { mutableStateOf(!manifestUrl.startsWith("https://dl.tx5dr.com/tx-5dr/android-runtime/")) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier
@@ -1063,6 +1068,12 @@ private fun SettingsSheet(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            TextButton(onClick = { (updateContext as? android.app.Activity)?.let { com.tx5dr.bridge.ApkUpdates.check(it) } }) { Text(stringResource(R.string.apk_update)) }
+            if (BridgeRuntime.hasUpdateBackup()) TextButton(enabled = bridgeStatus.runtimeState != RuntimeState.Installing, onClick = {
+                android.app.AlertDialog.Builder(updateContext).setMessage(R.string.update_restore_confirm)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(R.string.update_restore) { _, _ -> com.tx5dr.bridge.BridgeService.start(updateContext, com.tx5dr.bridge.BridgeService.ACTION_RESTORE) }.show()
+            }) { Text(stringResource(R.string.update_restore)) }
             Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             SettingsGroup {
                 SettingsSwitch(
@@ -1132,7 +1143,16 @@ private fun SettingsSheet(
                     enabled = bridgeStatus.runtimeAbiStatus.supported,
                 )
             }
-            OutlinedTextField(
+            Text(stringResource(R.string.update_channel))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(enabled = BridgeRuntime.canChangeUpdateChannel(), onClick = { onManifestUrlChange("https://dl.tx5dr.com/tx-5dr/android-runtime/release/latest.json") }) { Text(stringResource(R.string.update_stable)) }
+                TextButton(enabled = BridgeRuntime.canChangeUpdateChannel(), onClick = { onManifestUrlChange("https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json") }) { Text(stringResource(R.string.update_nightly)) }
+            }
+            Text(stringResource(R.string.update_channel_help), style = MaterialTheme.typography.bodySmall)
+            Text(if (manifestUrl.contains("/release/")) stringResource(R.string.update_stable) else if (manifestUrl.contains("/nightly/")) stringResource(R.string.update_nightly) else stringResource(R.string.manifest_url))
+            TextButton(onClick = { showCustomUpdateSource = !showCustomUpdateSource }) { Text(stringResource(R.string.manifest_url)) }
+            if (showCustomUpdateSource) OutlinedTextField(
+                enabled = bridgeStatus.runtimeState != RuntimeState.Installing,
                 value = manifestUrl,
                 onValueChange = onManifestUrlChange,
                 label = { Text(stringResource(R.string.manifest_url)) },

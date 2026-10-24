@@ -220,4 +220,18 @@
     <string name="data_directory_open_hint">ファイルアプリでこのパスを開いてください: %1$s</string>
     <string name="not_available">利用できません</string>
 
+    <string name="update_channel">ランタイム更新チャンネル</string>
+    <string name="update_stable">正式版（推奨）</string>
+    <string name="update_nightly">Nightly</string>
+    <string name="update_channel_help">チャンネルを選択して確認します。選択だけではインストールしません。APK は別に更新します。以下の URL は高度なカスタムソース用です。</string>
+    <string name="update_switch_warning">インストール時に停止しデータをバックアップします。古い版とは互換性がない場合があります。確認するとバックアップ後に強制切替します。復元すると以降の変更が失われます。</string>
+    <string name="apk_update">Android アプリの更新を確認</string>
+    <string name="apk_no_release">正式版 APK はまだありません。</string>
+    <string name="apk_current">Android アプリは最新です。</string>
+    <string name="apk_confirm">Android アプリ：%1$s → %2$s。APK をダウンロード・検証しますか？ランタイムチャンネルは変更されません。</string>
+    <string name="apk_permission">設定でインストールを許可してから再度更新を確認してください。</string>
+    <string name="update_stable_migration">正式版ランタイムが公開されました。正式版を確認しますか？インストールを確認するまで現在のバージョンは変わりません。</string>
+    <string name="update_restore">前回の更新前バックアップを復元</string>
+    <string name="update_restore_confirm">停止して以前のプログラムとデータを復元しますか？元のバックアップ以降の変更は使用されなくなります。先に現在のデータを別途保存します。復元を確認してから手動で起動してください。</string>
+    <string name="update_channel_empty">このチャンネルにはランタイムがまだ公開されていません。選択を保持して後で再確認できます。</string>
 </resources>

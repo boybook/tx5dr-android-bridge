@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       force_rebuild_assets:
@@ -15,9 +16,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-apk-publication
+  cancel-in-progress: false
+
 jobs:
   build-release-apk:
-    name: Build and publish nightly APK
+    name: Build and publish signed APK
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -189,17 +194,40 @@ jobs:
           build_stamp="$(date -u +'%Y%m%d%H%M')"
           build_ts="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           display_ts="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          version_name="0.1.0-nightly.${build_stamp}+${short_sha}"
+          channel=nightly
+          tag=nightly-android-bridge
+          base_version=$(node -p 'require("./android-version.json").version')
+          version_name="${base_version}-nightly.${build_stamp}+${short_sha}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            channel=release
+            tag="$GITHUB_REF_NAME"
+            version_name="${tag#v}"
+            [[ "$version_name" == "$base_version" ]] || { echo "APK tag and source version differ" >&2; exit 1; }
+          fi
+          version_code=$(( $(date +%s) - 1577836800 ))
+          for previous_channel in release nightly; do
+            code=$(curl -sS -w '%{http_code}' -o previous.json "https://dl.tx5dr.com/tx-5dr/android-bridge/${previous_channel}/latest.json")
+            if [[ "$code" == 200 ]]; then
+              previous=$(node -p 'JSON.parse(require("fs").readFileSync("previous.json")).version_code')
+              (( version_code > previous )) || version_code=$((previous + 1))
+            elif [[ "$code" != 404 ]]; then exit 1; fi
+          done
+          echo "RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "ANDROID_BRIDGE_OBJECT_PREFIX=tx-5dr/android-bridge/builds/$version_name" >> "$GITHUB_ENV"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           commit_title="$(git show -s --format=%s "$GITHUB_SHA")"
           echo "SHORT_SHA=$short_sha" >> "$GITHUB_ENV"
           echo "BUILD_TIMESTAMP=$build_ts" >> "$GITHUB_ENV"
           echo "DISPLAY_TIMESTAMP=$display_ts" >> "$GITHUB_ENV"
           echo "COMMIT_TITLE=$commit_title" >> "$GITHUB_ENV"
-          echo "TX5DR_ANDROID_VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "TX5DR_ANDROID_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
           echo "TX5DR_ANDROID_VERSION_NAME=$version_name" >> "$GITHUB_ENV"
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
-          echo "version_code=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "published_at=$build_ts" >> "$GITHUB_OUTPUT"
           echo "display_timestamp=$display_ts" >> "$GITHUB_OUTPUT"
           echo "commit_title=$commit_title" >> "$GITHUB_OUTPUT"
@@ -242,8 +270,8 @@ jobs:
           node scripts/generate-nightly-manifest.mjs \
             --apk "$out" \
             --output release-assets/latest.json \
-            --channel nightly \
-            --tag nightly-android-bridge \
+            --channel "$RELEASE_CHANNEL" \
+            --tag "$RELEASE_TAG" \
             --version "$TX5DR_ANDROID_VERSION_NAME" \
             --version-code "$TX5DR_ANDROID_VERSION_CODE" \
             --package-name com.tx5dr.bridge \
@@ -267,8 +295,8 @@ jobs:
           const path = require('node:path');
           const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
           if (manifest.product !== 'android-bridge') throw new Error('manifest product must be android-bridge');
-          if (manifest.channel !== 'nightly') throw new Error('manifest channel must be nightly');
-          if (manifest.tag !== 'nightly-android-bridge') throw new Error('manifest tag must be nightly-android-bridge');
+          if (manifest.channel !== process.env.RELEASE_CHANNEL) throw new Error('manifest channel mismatch');
+          if (manifest.tag !== process.env.RELEASE_TAG) throw new Error('manifest tag mismatch');
           if (manifest.package_name !== 'com.tx5dr.bridge') throw new Error('manifest package_name mismatch');
           if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
             throw new Error('manifest missing recent_commits');
@@ -298,11 +326,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create or Update Nightly Android Bridge Release
+      - name: Add versioned manifest alias
+        run: cp release-assets/latest.json release-assets/android-bridge-manifest.json
+
+      - name: Create Android Bridge Release
         uses: ncipollo/release-action@v1
         with:
-          tag: nightly-android-bridge
-          name: "Nightly Build — Android Bridge APK"
+          tag: ${{ steps.apk-version.outputs.tag }}
+          commit: ${{ github.sha }}
+          name: "Android Bridge ${{ steps.apk-version.outputs.version_name }}"
           body: |
             ## TX-5DR Nightly Build — Android Bridge APK
 
@@ -324,12 +356,12 @@ jobs:
             ```
 
             This release contains the signed Android APK only. The TX-5DR Linux runtime remains a separate downloadable runtime package consumed by the app.
-          allowUpdates: true
+          allowUpdates: ${{ steps.apk-version.outputs.channel == 'nightly' }}
           removeArtifacts: true
           artifacts: "release-assets/*"
           token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: true
-          makeLatest: false
+          prerelease: ${{ steps.apk-version.outputs.channel == 'nightly' }}
+          makeLatest: ${{ steps.apk-version.outputs.channel == 'release' }}
 
       - name: Install ossutil
         shell: bash
@@ -388,4 +420,7 @@ jobs:
           for file in release-assets/*; do
             ossutil cp "$file" "oss://${OSS_BUCKET}/${ANDROID_BRIDGE_OBJECT_PREFIX}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
           done
-          ossutil cp "release-assets/latest.json" "oss://${OSS_BUCKET}/tx-5dr/android-bridge/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          ossutil cp "release-assets/latest.json" "oss://${OSS_BUCKET}/tx-5dr/android-bridge/${RELEASE_CHANNEL}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+
+          curl -fsSL "https://dl.tx5dr.com/tx-5dr/android-bridge/${RELEASE_CHANNEL}/latest.json" -o published.json
+          node -e 'const m=JSON.parse(require("fs").readFileSync("published.json")); if(m.commit!==process.env.GITHUB_SHA || m.channel!==process.env.RELEASE_CHANNEL) throw new Error("Live APK channel mismatch")'

@@ -113,8 +113,10 @@ async function main() {
   const [fileBuffer, fileStats] = await Promise.all([readFile(apkPath), stat(apkPath)]);
   const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
   const assetUrl = joinUrl(baseUrl, fileName);
+  const githubUrl = `https://github.com/${process.env.GITHUB_REPOSITORY || 'boybook/tx5dr-android-bridge'}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(fileName)}`;
 
   const manifest = {
+    schema_version: 1,
     product: 'android-bridge',
     channel,
     tag,
@@ -133,7 +135,8 @@ async function main() {
         url: assetUrl,
         url_cn: assetUrl,
         url_oss: assetUrl,
-        url_global: assetUrl,
+        url_global: githubUrl,
+        url_github: githubUrl,
         sha256,
         size: fileStats.size,
         platform: 'android',

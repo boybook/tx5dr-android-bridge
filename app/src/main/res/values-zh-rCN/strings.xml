@@ -220,4 +220,18 @@
     <string name="data_directory_open_hint">请在文件管理器中打开：%1$s</string>
     <string name="not_available">不可用</string>
 
+    <string name="update_channel">运行时更新频道</string>
+    <string name="update_stable">正式版（推荐）</string>
+    <string name="update_nightly">Nightly</string>
+    <string name="update_channel_help">选择频道以预览版本；选择不会立即安装。APK 独立更新。下方地址仅供高级自定义源使用。</string>
+    <string name="update_switch_warning">安装会停止运行时并备份用户数据。较旧版本可能不兼容；确认后备份并强制切换。恢复备份会丢失备份之后的变化。</string>
+    <string name="apk_update">检查 Android 应用更新</string>
+    <string name="apk_no_release">暂无正式版 APK。</string>
+    <string name="apk_current">Android 应用已是最新版本。</string>
+    <string name="apk_confirm">Android 应用：%1$s → %2$s。下载并校验 APK？运行时频道不会改变。</string>
+    <string name="apk_permission">请在设置中允许安装应用，然后重新检查应用更新以安装。</string>
+    <string name="update_stable_migration">正式版运行时已发布。是否查看正式频道？只有确认安装后才会改变当前运行版本。</string>
+    <string name="update_restore">恢复上次更新前的备份</string>
+    <string name="update_restore_confirm">停止运行时并恢复之前的程序和数据？恢复后不再使用该备份之后的变化；会先另行备份当前数据。确认恢复结果后请手动启动服务。</string>
+    <string name="update_channel_empty">此频道暂无运行时版本。可以保留选择，稍后重试。</string>
 </resources>
