@@ -323,7 +323,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TX-5DR-Android-Bridge-nightly-${{ steps.apk-version.outputs.short_sha }}
+          name: TX-5DR-Android-Bridge-${{ steps.apk-version.outputs.channel }}-${{ steps.apk-version.outputs.short_sha }}
           path: release-assets/*
           if-no-files-found: error
           retention-days: 14
@@ -338,7 +338,7 @@ jobs:
           commit: ${{ github.sha }}
           name: "Android Bridge ${{ steps.apk-version.outputs.version_name }}"
           body: |
-            ## TX-5DR Nightly Build — Android Bridge APK
+            ## TX-5DR Android ${{ steps.apk-version.outputs.version_name }}
 
             **Built at** （构建时间）: ${{ steps.apk-version.outputs.display_timestamp }}
             **Version**: `${{ steps.apk-version.outputs.version_name }}`
@@ -348,13 +348,13 @@ jobs:
             ### Android Bridge Manifest
 
             ```text
-            https://dl.tx5dr.com/tx-5dr/android-bridge/nightly/latest.json
+            https://dl.tx5dr.com/tx-5dr/android-bridge/${{ steps.apk-version.outputs.channel }}/latest.json
             ```
 
             ### Runtime Manifest
 
             ```text
-            https://dl.tx5dr.com/tx-5dr/android-runtime/nightly/latest.json
+            https://dl.tx5dr.com/tx-5dr/android-runtime/${{ steps.apk-version.outputs.channel }}/latest.json
             ```
 
             This release contains the signed Android APK only. The TX-5DR Linux runtime remains a separate downloadable runtime package consumed by the app.
